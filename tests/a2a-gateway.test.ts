@@ -79,12 +79,10 @@ function makeConfig(overrides: Record<string, unknown> = {}): Record<string, unk
     peers: [],
     security: {
       inboundAuth: "none",
-      fileSecurity: {
-        allowedMimeTypes: ["image/*", "application/pdf", "text/plain", "text/csv", "application/json", "audio/*", "video/*"],
-        maxFileSizeBytes: 52_428_800,
-        maxInlineFileSizeBytes: 10_485_760,
-        fileUriAllowlist: [],
-      },
+      allowedMimeTypes: ["image/*", "application/pdf", "text/plain", "text/csv", "application/json", "audio/*", "video/*"],
+      maxFileSizeBytes: 52_428_800,
+      maxInlineFileSizeBytes: 10_485_760,
+      fileUriAllowlist: [],
     },
     routing: {
       defaultAgentId: "default-agent",

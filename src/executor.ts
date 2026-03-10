@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { Message, Part, Task } from "@a2a-js/sdk";
 import type { AgentExecutor, ExecutionEventBus, RequestContext } from "@a2a-js/sdk/server";
 
-import type { FileSecurityConfig, GatewayConfig, OpenClawPluginApi } from "./types.js";
+import type { GatewayConfig, OpenClawPluginApi } from "./types.js";
 import {
   validateMimeType,
   validateUriSchemeAndIp,
@@ -696,13 +696,13 @@ export class OpenClawAgentExecutor implements AgentExecutor {
   private readonly api: OpenClawPluginApi;
   private readonly defaultAgentId: string;
   private readonly agentResponseTimeoutMs: number;
-  private readonly fileSecurity: FileSecurityConfig;
+  private readonly security: GatewayConfig["security"];
   private readonly taskContextByTaskId: Map<string, string>;
 
   constructor(api: OpenClawPluginApi, config: GatewayConfig) {
     this.api = api;
     this.defaultAgentId = config.routing.defaultAgentId;
-    this.fileSecurity = config.security.fileSecurity;
+    this.security = config.security;
 
     const configured = config.timeouts?.agentResponseTimeoutMs;
     this.agentResponseTimeoutMs =
@@ -995,7 +995,7 @@ export class OpenClawAgentExecutor implements AgentExecutor {
         if (schemeCheck) {
           return `URI blocked: ${sanitizeUriForLog(uri)} — ${schemeCheck}`;
         }
-        if (mimeType && !validateMimeType(mimeType, this.fileSecurity.allowedMimeTypes)) {
+        if (mimeType && !validateMimeType(mimeType, this.security.allowedMimeTypes)) {
           return `MIME type rejected: "${mimeType}"`;
         }
       }
@@ -1003,11 +1003,11 @@ export class OpenClawAgentExecutor implements AgentExecutor {
       // Inline base64 file: size + MIME check
       if (bytes) {
         const decodedSize = decodedBase64Size(bytes);
-        const sizeCheck = checkFileSize(decodedSize, this.fileSecurity.maxInlineFileSizeBytes);
+        const sizeCheck = checkFileSize(decodedSize, this.security.maxInlineFileSizeBytes);
         if (!sizeCheck.ok) {
           return `Inline file too large: ${sizeCheck.reason}`;
         }
-        if (mimeType && !validateMimeType(mimeType, this.fileSecurity.allowedMimeTypes)) {
+        if (mimeType && !validateMimeType(mimeType, this.security.allowedMimeTypes)) {
           return `MIME type rejected: "${mimeType}"`;
         }
       }

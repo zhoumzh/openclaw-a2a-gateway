@@ -63,6 +63,11 @@ export interface FileSecurityConfig {
   fileUriAllowlist: string[];
 }
 
+export interface SecurityConfig extends FileSecurityConfig {
+  inboundAuth: InboundAuth;
+  token?: string;
+}
+
 export interface GatewayConfig {
   agentCard: AgentCardConfig;
   server: {
@@ -73,11 +78,7 @@ export interface GatewayConfig {
     tasksDir: string;
   };
   peers: PeerConfig[];
-  security: {
-    inboundAuth: InboundAuth;
-    token?: string;
-    fileSecurity: FileSecurityConfig;
-  };
+  security: SecurityConfig;
   routing: {
     defaultAgentId: string;
   };

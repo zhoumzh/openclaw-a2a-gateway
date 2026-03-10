@@ -24,7 +24,6 @@ import { FileTaskStore } from "./src/task-store.js";
 import { GatewayTelemetry } from "./src/telemetry.js";
 import type {
   AgentCardConfig,
-  FileSecurityConfig,
   GatewayConfig,
   InboundAuth,
   OpenClawPluginApi,
@@ -160,13 +159,6 @@ function parseConfig(raw: unknown, resolvePath?: (nextPath: string) => string): 
   const rawUriAllowlist = Array.isArray(security.fileUriAllowlist) ? security.fileUriAllowlist : [];
   const fileUriAllowlist = rawUriAllowlist.filter((v: unknown) => typeof v === "string") as string[];
 
-  const fileSecurity: FileSecurityConfig = {
-    allowedMimeTypes,
-    maxFileSizeBytes: asNumber(security.maxFileSizeBytes, 52_428_800),
-    maxInlineFileSizeBytes: asNumber(security.maxInlineFileSizeBytes, 10_485_760),
-    fileUriAllowlist,
-  };
-
   return {
     agentCard: parseAgentCard(asObject(config.agentCard)),
     server: {
@@ -180,7 +172,10 @@ function parseConfig(raw: unknown, resolvePath?: (nextPath: string) => string): 
     security: {
       inboundAuth: inboundAuth === "bearer" ? "bearer" : "none",
       token: asString(security.token, ""),
-      fileSecurity,
+      allowedMimeTypes,
+      maxFileSizeBytes: asNumber(security.maxFileSizeBytes, 52_428_800),
+      maxInlineFileSizeBytes: asNumber(security.maxInlineFileSizeBytes, 10_485_760),
+      fileUriAllowlist,
     },
     routing: {
       defaultAgentId: asString(routing.defaultAgentId, "default"),
@@ -395,9 +390,7 @@ const plugin = {
           }
 
           // Security checks: SSRF, MIME, file size
-          const fs = config.security.fileSecurity;
-
-          const uriCheck = await validateUri(params.uri, fs);
+          const uriCheck = await validateUri(params.uri, config.security);
           if (!uriCheck.ok) {
             return {
               content: [{ type: "text" as const, text: `URI rejected: ${uriCheck.reason}` }],
@@ -405,7 +398,7 @@ const plugin = {
             };
           }
 
-          if (params.mimeType && !validateMimeType(params.mimeType, fs.allowedMimeTypes)) {
+          if (params.mimeType && !validateMimeType(params.mimeType, config.security.allowedMimeTypes)) {
             return {
               content: [{ type: "text" as const, text: `MIME type rejected: "${params.mimeType}" is not in the allowed list` }],
               details: { ok: false },
