@@ -171,6 +171,11 @@
           "metricsPath": {
             "type": "string",
             "default": "/a2a/metrics"
+          },
+          "auditLogPath": {
+            "type": "string",
+            "default": "data/audit.jsonl",
+            "description": "Path for the JSONL audit log file (separate from structured logs)."
           }
         }
       },

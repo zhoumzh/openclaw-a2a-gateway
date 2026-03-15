@@ -95,6 +95,7 @@ export interface GatewayConfig {
     structuredLogs: boolean;
     exposeMetricsEndpoint: boolean;
     metricsPath: string;
+    auditLogPath: string;
   };
   timeouts?: {
     /**
