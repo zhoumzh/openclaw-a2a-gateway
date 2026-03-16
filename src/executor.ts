@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
+import crypto from "node:crypto";
 
 import type { Message, Part, Task } from "@a2a-js/sdk";
 import type { AgentExecutor, ExecutionEventBus, RequestContext } from "@a2a-js/sdk/server";
@@ -375,6 +376,30 @@ interface GatewayWebSocket {
   removeEventListener(type: "close", listener: (event: unknown) => void): void;
 }
 
+/**
+ * Lazily generated Ed25519 device identity for this plugin instance.
+ * Persisted in-memory for the lifetime of the process so all connections
+ * from this gateway share the same device id and auto-pair only once.
+ */
+let cachedDeviceIdentity: { publicKey: string; privateKey: crypto.KeyObject; deviceId: string } | null = null;
+
+function getOrCreateDeviceIdentity(): { publicKey: string; privateKey: crypto.KeyObject; deviceId: string } {
+  if (cachedDeviceIdentity) return cachedDeviceIdentity;
+
+  const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
+  const publicKeyRaw = publicKey.export({ type: "spki", format: "der" });
+  // Ed25519 SPKI DER has a 12-byte header; the raw 32-byte key starts at offset 12
+  const rawBytes = publicKeyRaw.subarray(12);
+  const publicKeyB64Url = rawBytes.toString("base64url");
+  const deviceId = crypto
+    .createHash("sha256")
+    .update(rawBytes)
+    .digest("hex");
+
+  cachedDeviceIdentity = { publicKey: publicKeyB64Url, privateKey, deviceId };
+  return cachedDeviceIdentity;
+}
+
 class GatewayRpcConnection {
   private readonly wsUrl: string;
   private readonly gatewayToken: string;
@@ -387,6 +412,7 @@ class GatewayRpcConnection {
   private connectChallengeTimer: ReturnType<typeof setTimeout> | null;
   private connectChallengeResolver: ((nonce: string) => void) | null;
   private connectChallengeRejecter: ((error: Error) => void) | null;
+  private challengeNonce: string;
 
   constructor(config: GatewayRuntimeConfig) {
     this.wsUrl = config.wsUrl;
@@ -400,6 +426,7 @@ class GatewayRpcConnection {
     this.connectChallengeTimer = null;
     this.connectChallengeResolver = null;
     this.connectChallengeRejecter = null;
+    this.challengeNonce = "";
   }
 
   async connect(): Promise<void> {
@@ -477,7 +504,68 @@ class GatewayRpcConnection {
       throw error;
     }
 
-    await this.request("connect", this.buildConnectParams(), GATEWAY_CONNECT_TIMEOUT_MS, false);
+    try {
+      await this.request("connect", this.buildConnectParams(true), GATEWAY_CONNECT_TIMEOUT_MS, false);
+    } catch (connectError: unknown) {
+      const msg = connectError instanceof Error ? connectError.message : String(connectError);
+      // On older gateways (≤2026.3.11), sending a device identity may trigger
+      // "pairing required" if silent auto-pairing is not supported.
+      // Retry without device identity — the gateway token alone is sufficient
+      // on those versions because they preserve scopes for shared-auth connections.
+      if (msg.includes("pairing required") || msg.includes("device identity required")) {
+        this.challengeNonce = "";
+        await this.reconnect();
+        return;
+      }
+      throw connectError;
+    }
+  }
+
+  /**
+   * Reconnect without device identity (fallback for gateways that reject unpaired devices).
+   */
+  private async reconnect(): Promise<void> {
+    this.close();
+
+    const ctor = (globalThis as unknown as { WebSocket?: WebSocketConstructor }).WebSocket;
+    if (!ctor) throw new Error("WebSocket runtime is unavailable");
+
+    const socket = new ctor(this.wsUrl);
+    this.socket = socket;
+    this.messageListener = (event) => { this.handleMessage(event); };
+    this.closeListener = () => {
+      const error = new Error("gateway connection closed");
+      this.rejectConnectChallenge(error);
+      this.rejectAllPending(error);
+    };
+    socket.addEventListener("message", this.messageListener);
+    socket.addEventListener("close", this.closeListener);
+
+    const challengePromise = this.awaitConnectChallenge();
+
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const settle = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        socket.removeEventListener("open", onOpen);
+        socket.removeEventListener("error", onError);
+        socket.removeEventListener("close", onClose);
+        if (error) { this.rejectConnectChallenge(error); reject(error); return; }
+        resolve();
+      };
+      const onOpen = () => settle();
+      const onError = () => settle(new Error("failed to open gateway websocket"));
+      const onClose = () => settle(new Error("gateway websocket closed during connect"));
+      const timer = setTimeout(() => settle(new Error("gateway websocket connect timed out")), GATEWAY_CONNECT_TIMEOUT_MS);
+      socket.addEventListener("open", onOpen);
+      socket.addEventListener("error", onError);
+      socket.addEventListener("close", onClose);
+    });
+
+    await challengePromise;
+    await this.request("connect", this.buildConnectParams(false), GATEWAY_CONNECT_TIMEOUT_MS, false);
   }
 
   async request(
@@ -552,7 +640,8 @@ class GatewayRpcConnection {
     this.clearConnectChallengeWait();
 
     return new Promise<void>((resolve, reject) => {
-      this.connectChallengeResolver = () => {
+      this.connectChallengeResolver = (nonce: string) => {
+        this.challengeNonce = nonce;
         this.clearConnectChallengeWait();
         resolve();
       };
@@ -589,7 +678,7 @@ class GatewayRpcConnection {
     this.clearConnectChallengeWait();
   }
 
-  private buildConnectParams(): Record<string, unknown> {
+  private buildConnectParams(includeDevice: boolean = true): Record<string, unknown> {
     const auth: Record<string, string> = {};
     if (this.gatewayToken) {
       auth.token = this.gatewayToken;
@@ -597,6 +686,9 @@ class GatewayRpcConnection {
     if (this.gatewayPassword) {
       auth.password = this.gatewayPassword;
     }
+
+    const role = "operator";
+    const scopes = ["operator.admin", "operator.read", "operator.write", "operator.approvals", "operator.pairing"];
 
     const params: Record<string, unknown> = {
       minProtocol: 3,
@@ -608,12 +700,49 @@ class GatewayRpcConnection {
         mode: "cli",
         instanceId: uuidv4(),
       },
-      role: "operator",
-      scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals", "operator.pairing"],
+      role,
+      scopes,
     };
 
     if (Object.keys(auth).length > 0) {
       params.auth = auth;
+    }
+
+    // Build device identity so the gateway preserves requested scopes.
+    // Without this, OpenClaw ≥2026.3.13 clears scopes for connections
+    // that lack a device identity, causing "missing scope: operator.write".
+    // See: https://github.com/win4r/openclaw-a2a-gateway/issues/29
+    const nonce = this.challengeNonce;
+    if (includeDevice && nonce) {
+      const identity = getOrCreateDeviceIdentity();
+      const signedAtMs = Date.now();
+
+      // Build the v3 signature payload — must match buildDeviceAuthPayloadV3 in OpenClaw core
+      const payloadParts = [
+        "v3",
+        identity.deviceId,
+        "cli",                          // clientId
+        "cli",                          // clientMode
+        role,
+        scopes.join(","),
+        String(signedAtMs),
+        auth.token || "",               // token from shared auth
+        nonce,
+        process.platform,               // platform
+        "",                             // deviceFamily (empty)
+      ];
+      const payload = payloadParts.join("|");
+
+      const signature = crypto.sign(null, Buffer.from(payload), identity.privateKey);
+      const signatureB64Url = signature.toString("base64url");
+
+      params.device = {
+        id: identity.deviceId,
+        publicKey: identity.publicKey,
+        signedAt: signedAtMs,
+        nonce,
+        signature: signatureB64Url,
+      };
     }
 
     return params;
