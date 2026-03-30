@@ -19,14 +19,15 @@ A production-ready [OpenClaw](https://github.com/openclaw/openclaw) plugin that 
 
 ### Intelligent Routing
 - **Rule-based routing**: auto-select peer by message pattern, tags, or peer skills
+- **Hill equation affinity scoring**: multi-dimensional routing with sigmoid scoring — skills, tags, pattern, and success rate weighted via `score = affinity^n / (Kd^n + affinity^n)` ([Hill, 1910](https://en.wikipedia.org/wiki/Hill_equation_(biochemistry)))
 - **Peer skills caching**: Agent Card skills extracted during health checks, enabling skills-based routing
 - **Per-message agentId targeting**: route to specific OpenClaw agents on the peer (OpenClaw extension)
 
 ### Discovery & Resilience
 - **DNS-SD discovery**: auto-discover peers via `_a2a._tcp` SRV + TXT records
 - **mDNS self-advertisement**: publish SRV + TXT records so other gateways find you automatically
-- **Health checks** with exponential backoff + circuit breaker (closed → open → half-open)
-- **Push notifications**: webhook delivery on task completion with HMAC + SSRF validation
+- **Four-state circuit breaker**: bio-inspired desensitization model (closed → desensitized → open → recovering) with exponential recovery curve
+- **Push notifications**: webhook delivery with signal-decay importance management and decay-aware retry
 
 ### Security & Observability
 - **Bearer token auth** with multi-token zero-downtime rotation
@@ -633,6 +634,20 @@ Once installed, tell your agent:
 - "Add an A2A peer"
 
 The agent will follow the skill's procedure automatically.
+
+## Bio-inspired Design
+
+This gateway incorporates principles from **cell signaling biology** to improve agent communication. Each mechanism is backed by peer-reviewed research and mapped to a concrete engineering problem:
+
+| Biology | Mechanism | A2A Feature | Reference |
+|---------|-----------|-------------|-----------|
+| Ligand-receptor binding | Hill equation sigmoid | **Affinity-scored routing** — multi-dimensional match scoring with configurable steepness (n) and threshold (Kd) | Hill (1910) *J Physiol* 40 |
+| Receptor desensitization | Phosphorylation → internalization → recycling | **Four-state circuit breaker** — gradual degradation (DESENSITIZED) before full block (OPEN), with exponential recovery curve | Bhalla & Bhatt (2007) *BMC Syst Biol* 1:54 |
+| cAMP degradation | Phosphodiesterase enzyme decay | **Signal decay notifications** — importance score decays exponentially; retry abandoned when below threshold | Alon (2007) *Intro to Systems Biology* Ch.4 |
+
+All bio-inspired features are **optional and backward-compatible** — without explicit configuration, the gateway behaves identically to standard implementations.
+
+> Part of an ongoing research initiative mapping cell signaling to agent communication protocols. See [A2A-Biomimetic-Research](https://github.com/win4r/openclaw-a2a-gateway/pulls?q=label%3Abio-inspired) for related PRs.
 
 ## Version History
 

@@ -19,14 +19,15 @@
 
 ### 智能路由
 - **规则路由**：按消息模式、标签或 Peer 技能自动选择目标
+- **Hill 方程亲和力评分**：多维度路由评分，skills/tags/pattern/成功率加权，通过 sigmoid 函数 `score = affinity^n / (Kd^n + affinity^n)` 排序（[Hill, 1910](https://en.wikipedia.org/wiki/Hill_equation_(biochemistry))）
 - **Peer 技能缓存**：健康检查时从 Agent Card 提取技能，驱动 skills 路由匹配
 - **指定 agentId 路由**：单条消息可路由到 Peer 上的特定 OpenClaw Agent
 
 ### 发现与韧性
 - **DNS-SD 发现**：通过 `_a2a._tcp` SRV + TXT 记录自动发现 Peer
 - **mDNS 自广播**：发布 SRV + TXT 记录，让其他 Gateway 自动发现你
-- **健康检查** + 指数退避 + 熔断器（closed → open → half-open）
-- **Push 通知**：任务完成时 webhook 回调，HMAC 签名 + SSRF 防护
+- **四态仿生熔断器**：受体脱敏模型（closed → desensitized → open → recovering），指数恢复曲线
+- **Push 通知**：信号衰减重要性管理 + 衰减感知重试，webhook 回调 + SSRF 防护
 
 ### 安全与可观测
 - **Bearer Token 认证**，多 Token 零停机轮换
@@ -562,6 +563,18 @@ Skill 提供两种 agent 调用方式：
 - "添加一个 A2A peer"
 
 Agent 会自动按照 skill 的流程执行。
+
+## 仿生设计
+
+本 Gateway 引入**细胞信号传导**的数学模型来改进 Agent 通信。每个机制都有同行评审论文支撑，并映射到具体的工程问题：
+
+| 生物学 | 机制 | A2A 特性 | 参考文献 |
+|--------|------|----------|---------|
+| 配体-受体结合 | Hill 方程 sigmoid | **亲和力评分路由** — 多维度匹配评分，可配置陡峭度 (n) 和阈值 (Kd) | Hill (1910) *J Physiol* 40 |
+| 受体脱敏 | 磷酸化→内化→回收 | **四态熔断器** — 渐进降级（DESENSITIZED）后全断（OPEN），指数恢复曲线 | Bhalla & Bhatt (2007) *BMC Syst Biol* 1:54 |
+| cAMP 降解 | 磷酸二酯酶酶降解 | **信号衰减通知** — 重要性指数衰减；低于阈值自动放弃重试 | Alon (2007)《系统生物学导论》Ch.4 |
+
+所有仿生特性**可选且向后兼容** — 不显式配置时，Gateway 行为与标准实现完全一致。
 
 ## 版本历史
 
