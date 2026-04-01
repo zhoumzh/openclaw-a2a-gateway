@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.0] - 2026-04-01
+
+### Added
+
+- **Bio-inspired integration wiring** — connect 5 standalone bio-inspired modules into the plugin runtime, making them activatable via config (Phase 2.5):
+  - Hill equation affinity routing: `routing.affinity` config enables scored multi-dimensional matching instead of first-match
+  - Quorum-sensing discovery: `discovery.quorum` config wraps DNS-SD polling with density-aware adaptive intervals
+  - Signal decay retry: push notifications now use `sendWithRetry()` with exponential importance decay
+  - Adaptive transport: per-peer `TransportStats` tracking with automatic performance-based ordering
+  - Michaelis-Menten soft concurrency: `limits.saturation` config adds progressive delay before hard queue limit
+- New config schema sections: `routing.affinity`, `discovery.quorum`, `limits.saturation` (all optional, backward-compatible)
+- 5-dimension benchmark test suite (`tests/benchmark.test.ts`) comparing legacy vs bio-inspired behavior
+- README repositioned with "When to enable" practical guidance for each bio-inspired feature
+
+### Changed
+
+- Push notification delivery upgraded from fire-and-forget `send()` to decay-aware `sendWithRetry()` with default DecayConfig
+- Transport fallback loop now records per-peer performance stats for adaptive ordering on subsequent calls
+- QueueingAgentExecutor applies Michaelis-Menten delay before task execution when saturation config is present
+
+### Fixed
+
+- `sendWithRetry()` was called without DecayConfig parameter, making signal decay retry effectively dead code — now passes default config (k=0.001, minImportance=0.1, maxRetries=3)
+- TransportStats lookup hoisted out of fallback loop to avoid redundant Map.get per iteration
+
 ## [1.2.0] - 2026-03-24
 
 ### Added
