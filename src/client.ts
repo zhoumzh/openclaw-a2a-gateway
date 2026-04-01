@@ -276,10 +276,9 @@ export class A2AClient {
     }
 
     let lastError: unknown;
+    const loopStats = this.getOrCreateStats(peer.name);
     for (let i = 0; i < transports.length; i++) {
       const endpoint = transports[i];
-
-      const stats = this.getOrCreateStats(peer.name);
 
       log?.("info", "transport.try", {
         peer: peer.name,
@@ -299,7 +298,7 @@ export class A2AClient {
         );
 
         // Record transport performance for adaptive ordering
-        stats.record(endpoint.transport, result.ok, Date.now() - transportStartedAt);
+        loopStats.record(endpoint.transport, result.ok, Date.now() - transportStartedAt);
 
         // Success or non-retryable failure → return immediately
         if (result.ok || !isRetryableTransportError(result)) {
@@ -324,7 +323,7 @@ export class A2AClient {
         });
       } catch (error: unknown) {
         // Record failure for adaptive ordering
-        stats.record(endpoint.transport, false, Date.now() - transportStartedAt);
+        loopStats.record(endpoint.transport, false, Date.now() - transportStartedAt);
 
         if (!isRetryableTransportError(error)) {
           // Non-retryable error (auth, protocol) → stop immediately

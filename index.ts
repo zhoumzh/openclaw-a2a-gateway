@@ -439,7 +439,12 @@ const plugin = {
           if (!task) return;
           // Bio-inspired signal decay: use decay-aware retry so stale
           // notifications are automatically abandoned (cAMP degradation analogy).
-          return pushStore.sendWithRetry(taskId, state, task);
+          return pushStore.sendWithRetry(taskId, state, task, {
+            decayRate: 0.001,
+            minImportance: 0.1,
+            maxRetries: 3,
+            retryBaseDelayMs: 2000,
+          });
         }).then((result) => {
           if (result && result.ok) {
             api.logger.info(`a2a-gateway: push notification sent for task ${taskId} (${state})`);
