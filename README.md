@@ -2,12 +2,14 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![A2A v0.3.0](https://img.shields.io/badge/A2A-v0.3.0-green.svg)](https://github.com/google/A2A)
-[![Tests](https://img.shields.io/badge/tests-360%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-469%20passing-brightgreen.svg)]()
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-blue.svg)]()
 
 [English](README.md) | [简体中文](README_CN.md) | [繁體中文](README_TW.md) | [日本語](README_JA.md) | [한국어](README_KO.md) | [Français](README_FR.md) | [Español](README_ES.md) | [Deutsch](README_DE.md) | [Italiano](README_IT.md) | [Русский](README_RU.md) | [Português (Brasil)](README_PT-BR.md)
 
 A production-ready [OpenClaw](https://github.com/openclaw/openclaw) plugin that implements the [A2A (Agent-to-Agent) v0.3.0 protocol](https://github.com/google/A2A), enabling OpenClaw agents to discover and communicate with each other across servers — with zero-config install and automatic peer discovery.
+
+**The only A2A gateway with adaptive, bio-inspired routing, discovery, and resilience — designed for multi-agent ecosystems at scale.**
 
 ## Key Features
 
@@ -640,7 +642,7 @@ The agent will follow the skill's procedure automatically.
 
 ## Bio-inspired Design
 
-This gateway incorporates principles from **cell signaling biology** to improve agent communication. Each mechanism is backed by peer-reviewed research and mapped to a concrete engineering problem:
+As multi-agent ecosystems scale from 2 peers to 20 or 200, standard A2A gateways hit predictable walls: routing picks the wrong peer, circuit breakers cut traffic entirely, discovery polls waste bandwidth, and overload hits like a cliff. This gateway solves these with mechanisms borrowed from **cell signaling biology** — the same principles cells use to route signals, handle receptor overload, and discover neighbors in dense tissue.
 
 | Biology | Mechanism | A2A Feature | Reference |
 |---------|-----------|-------------|-----------|
@@ -651,9 +653,20 @@ This gateway incorporates principles from **cell signaling biology** to improve 
 | Signal pathway selection | Pathway efficacy × transduction speed | **Adaptive transport** — per-transport scoring by success rate × latency factor; untested pathways get explore-first priority | Kholodenko (2006) *Nat Rev Mol Cell Biol* 7:165 |
 | Enzyme saturation | Michaelis-Menten kinetics | **Soft concurrency limiting** — progressive delay `baseDelay × load/(Km + load)` before the hard queue wall | Michaelis & Menten (1913) *Biochem Z* 49:333 |
 
-All bio-inspired features are **optional and backward-compatible** — without explicit configuration, the gateway behaves identically to standard implementations.
+### When to enable
 
-> Part of an ongoing research initiative mapping cell signaling to agent communication protocols. See [A2A-Biomimetic-Research](https://github.com/win4r/openclaw-a2a-gateway/pulls?q=label%3Abio-inspired) for related PRs.
+All bio-inspired features are **optional and backward-compatible** — without explicit configuration, the gateway behaves identically to standard implementations. Enable them when your deployment outgrows the defaults:
+
+| Feature | Enable when... | Config key |
+|---------|---------------|------------|
+| Hill affinity routing | 5+ peers with overlapping skills | `routing.affinity` |
+| Four-state circuit breaker | Peers have intermittent failures | `resilience.circuitBreaker.softThreshold` |
+| Signal decay retry | Webhook endpoints are unreliable | Enabled by default |
+| Quorum-sensing discovery | Dynamic peer networks with DNS-SD | `discovery.quorum` |
+| Adaptive transport | Peers expose multiple transports | Automatic (learns from usage) |
+| MM soft concurrency | High-throughput sub-second operations | `limits.saturation` |
+
+> Benchmark suite: `node --import tsx --test tests/benchmark.test.ts` — runs 5-dimension before/after comparison across all bio-inspired features.
 
 ## Version History
 

@@ -2,12 +2,14 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![A2A v0.3.0](https://img.shields.io/badge/A2A-v0.3.0-green.svg)](https://github.com/google/A2A)
-[![Tests](https://img.shields.io/badge/tests-360%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-469%20passing-brightgreen.svg)]()
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-blue.svg)]()
 
 [English](README.md) | [简体中文](README_CN.md) | [繁體中文](README_TW.md) | [日本語](README_JA.md) | [한국어](README_KO.md) | [Français](README_FR.md) | [Español](README_ES.md) | [Deutsch](README_DE.md) | [Italiano](README_IT.md) | [Русский](README_RU.md) | [Português (Brasil)](README_PT-BR.md)
 
 [OpenClaw](https://github.com/openclaw/openclaw) 插件，实现 [A2A (Agent-to-Agent) v0.3.0 协议](https://github.com/google/A2A)，让不同服务器上的 OpenClaw Agent 自动发现、安全通信——零配置即可启动。
+
+**目前唯一具备自适应仿生路由、发现和弹性的 A2A Gateway — 为大规模多 Agent 生态而设计。**
 
 ## 核心特性
 
@@ -566,15 +568,31 @@ Agent 会自动按照 skill 的流程执行。
 
 ## 仿生设计
 
-本 Gateway 引入**细胞信号传导**的数学模型来改进 Agent 通信。每个机制都有同行评审论文支撑，并映射到具体的工程问题：
+当多 Agent 生态从 2 个 peer 扩展到 20 甚至 200 个时，标准 A2A Gateway 会遇到可预见的瓶颈：路由选错 peer、熔断器一刀切断流量、发现轮询浪费带宽、过载像断崖一样突然崩溃。本 Gateway 用**细胞信号传导**的数学模型来解决这些问题——和细胞路由信号、处理受体过载、在密集组织中发现邻居用的是同一套原理。
 
 | 生物学 | 机制 | A2A 特性 | 参考文献 |
 |--------|------|----------|---------|
 | 配体-受体结合 | Hill 方程 sigmoid | **亲和力评分路由** — 多维度匹配评分，可配置陡峭度 (n) 和阈值 (Kd) | Hill (1910) *J Physiol* 40 |
 | 受体脱敏 | 磷酸化→内化→回收 | **四态熔断器** — 渐进降级（DESENSITIZED）后全断（OPEN），指数恢复曲线 | Bhalla & Bhatt (2007) *BMC Syst Biol* 1:54 |
 | cAMP 降解 | 磷酸二酯酶酶降解 | **信号衰减通知** — 重要性指数衰减；低于阈值自动放弃重试 | Alon (2007)《系统生物学导论》Ch.4 |
+| 群体感应 | 自诱导物浓度阈值 | **密度感知发现** — 基于 peer 数量自适应轮询，滞后防振荡（explore ↔ stable 模式） | Tamsir *et al.* (2011) *Nature* 469:212 |
+| 信号通路选择 | 通路效率 × 传导速度 | **自适应传输** — 按成功率 × 延迟因子评分排序传输协议；未测试的协议优先探索 | Kholodenko (2006) *Nat Rev Mol Cell Biol* 7:165 |
+| 酶饱和 | Michaelis-Menten 动力学 | **软并发限制** — 硬队列上限前的渐进延迟 `baseDelay × load/(Km + load)` | Michaelis & Menten (1913) *Biochem Z* 49:333 |
 
-所有仿生特性**可选且向后兼容** — 不显式配置时，Gateway 行为与标准实现完全一致。
+### 何时启用
+
+所有仿生特性**可选且向后兼容** — 不显式配置时，Gateway 行为与标准实现完全一致。当部署规模超过默认值时启用：
+
+| 特性 | 启用场景 | 配置键 |
+|------|---------|--------|
+| Hill 亲和力路由 | 5+ 个 peer 且技能有重叠 | `routing.affinity` |
+| 四态熔断器 | peer 有间歇性故障 | `resilience.circuitBreaker.softThreshold` |
+| 信号衰减重试 | webhook 端点不稳定 | 默认启用 |
+| 群体感应发现 | 动态 peer 网络 + DNS-SD | `discovery.quorum` |
+| 自适应传输 | peer 暴露多种传输协议 | 自动（从使用中学习） |
+| MM 软并发 | 高吞吐亚秒级操作 | `limits.saturation` |
+
+> 基准测试：`node --import tsx --test tests/benchmark.test.ts` — 5 维度 before/after 对比。
 
 ## 版本历史
 
