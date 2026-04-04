@@ -67,6 +67,13 @@ A production-ready [OpenClaw](https://github.com/openclaw/openclaw) plugin that 
 The plugin ships with sensible defaults — you can install and load it **without any manual configuration**:
 
 ```bash
+# Install from npm (recommended)
+openclaw plugins install openclaw-a2a-gateway
+```
+
+Or install from source:
+
+```bash
 # Clone
 mkdir -p ~/.openclaw/workspace/plugins
 cd ~/.openclaw/workspace/plugins

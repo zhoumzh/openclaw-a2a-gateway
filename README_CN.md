@@ -64,6 +64,13 @@
 插件内置了合理的默认值 —— **无需任何手动配置**即可安装并加载：
 
 ```bash
+# 从 npm 安装（推荐）
+openclaw plugins install openclaw-a2a-gateway
+```
+
+或从源码安装：
+
+```bash
 # 克隆
 mkdir -p ~/.openclaw/workspace/plugins
 cd ~/.openclaw/workspace/plugins
