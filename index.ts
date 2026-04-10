@@ -230,7 +230,7 @@ export function parseConfig(raw: unknown, resolvePath?: (nextPath: string) => st
       };
     })(),
     routing: {
-      defaultAgentId: asString(routing.defaultAgentId, "default"),
+      defaultAgentId: asString(routing.defaultAgentId, "main"),
       rules: parseRoutingRules(routing.rules),
       ...(routing.affinity != null ? {
         affinity: (() => {
@@ -334,6 +334,7 @@ const plugin = {
       new OpenClawAgentExecutor(api, config),
       telemetry,
       config.limits,
+      config.routing.defaultAgentId,
     );
     const agentCard = buildAgentCard(config);
 

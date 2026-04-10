@@ -92,13 +92,15 @@ export class QueueingAgentExecutor implements AgentExecutor {
   private readonly delegate: AgentExecutor;
   private readonly telemetry: GatewayTelemetry;
   private readonly options: QueueingExecutorOptions;
+  private readonly defaultAgentId: string;
   private readonly queue: QueuedTaskEntry[] = [];
   private readonly pendingByTaskId = new Map<string, QueuedTaskEntry>();
   private activeTasks = 0;
 
-  constructor(delegate: AgentExecutor, telemetry: GatewayTelemetry, options: QueueingExecutorOptions) {
+  constructor(delegate: AgentExecutor, telemetry: GatewayTelemetry, options: QueueingExecutorOptions, defaultAgentId = "main") {
     this.delegate = delegate;
     this.telemetry = telemetry;
+    this.defaultAgentId = defaultAgentId;
     this.options = {
       maxConcurrentTasks: Math.max(1, options.maxConcurrentTasks),
       maxQueuedTasks: Math.max(0, options.maxQueuedTasks),
@@ -290,6 +292,6 @@ export class QueueingAgentExecutor implements AgentExecutor {
 
   private pickAgentId(requestContext: RequestContext): string {
     const message = requestContext.userMessage as unknown as Record<string, unknown> | undefined;
-    return typeof message?.agentId === "string" ? message.agentId : "default";
+    return typeof message?.agentId === "string" ? message.agentId : this.defaultAgentId;
   }
 }
