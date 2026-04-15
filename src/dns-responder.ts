@@ -152,6 +152,12 @@ export class MdnsResponder {
     });
   }
 
+  /** Stop and restart mDNS advertising (e.g. after an instance name change). */
+  restart(): void {
+    this.stop();
+    this.start();
+  }
+
   /** Stop advertising and release the mDNS socket. */
   stop(): void {
     if (this.refreshTimer) {

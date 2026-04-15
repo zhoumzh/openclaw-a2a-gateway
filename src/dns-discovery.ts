@@ -31,10 +31,26 @@ export interface DiscoveredPeer {
   ttl: number;
 }
 
+/** Common interface for discovery managers (DNS-SD, HTTP Registry, etc.) */
+export interface IDiscoveryManager {
+  start(): void;
+  stop(): void;
+  getDiscoveredPeers(): DiscoveredPeer[];
+  toPeerConfigs(): PeerConfig[];
+  findPeer(name: string): DiscoveredPeer | undefined;
+  triggerRefresh(): Promise<void>;
+}
+
 export interface DnsDiscoveryConfig {
   enabled: boolean;
+  /** Discovery mode: "dns" for local mDNS/DNS-SD, "http" for external registry. Default: "dns" */
+  type?: "dns" | "http";
   /** DNS-SD service name to query. Default: "_a2a._tcp.local" */
   serviceName: string;
+  /** URL of the HTTP registry to poll for peers (required if type === "http") */
+  httpRegistryUrl?: string;
+  /** Optional Bearer token for HTTP registry authentication */
+  httpRegistryToken?: string;
   /** How often to re-query DNS (ms). Default: 30000 (30s). */
   refreshIntervalMs: number;
   /** Whether discovered peers supplement static config peers. Default: true. */
@@ -131,7 +147,7 @@ export function discoveredPeerToConfig(peer: DiscoveredPeer): PeerConfig {
 // Discovery Manager
 // ---------------------------------------------------------------------------
 
-export class DnsDiscoveryManager {
+export class DnsDiscoveryManager implements IDiscoveryManager {
   private readonly config: DnsDiscoveryConfig;
   private readonly log: DiscoveryLogFn;
   private discoveredPeers: DiscoveredPeer[] = [];
@@ -328,6 +344,7 @@ export class DnsDiscoveryManager {
 
 export const DNS_DISCOVERY_DEFAULTS: DnsDiscoveryConfig = {
   enabled: false,
+  type: "dns",
   serviceName: "_a2a._tcp.local",
   refreshIntervalMs: 30_000,
   mergeWithStatic: true,
@@ -338,11 +355,16 @@ export function parseDnsDiscoveryConfig(
 ): DnsDiscoveryConfig {
   if (!raw) return { ...DNS_DISCOVERY_DEFAULTS };
 
+  const type = typeof raw.type === "string" && raw.type === "http" ? "http" : "dns";
+
   return {
     enabled: typeof raw.enabled === "boolean" ? raw.enabled : DNS_DISCOVERY_DEFAULTS.enabled,
+    type,
     serviceName: typeof raw.serviceName === "string" && raw.serviceName.trim()
       ? raw.serviceName.trim()
       : DNS_DISCOVERY_DEFAULTS.serviceName,
+    httpRegistryUrl: typeof raw.httpRegistryUrl === "string" ? raw.httpRegistryUrl.trim() : undefined,
+    httpRegistryToken: typeof raw.httpRegistryToken === "string" ? raw.httpRegistryToken : undefined,
     refreshIntervalMs:
       typeof raw.refreshIntervalMs === "number" && Number.isFinite(raw.refreshIntervalMs) && raw.refreshIntervalMs >= 1000
         ? raw.refreshIntervalMs

@@ -439,7 +439,7 @@ interface PendingGatewayRequest {
 }
 
 interface WebSocketConstructor {
-  new (url: string): GatewayWebSocket;
+  new(url: string): GatewayWebSocket;
 }
 
 interface GatewayWebSocket {
@@ -471,17 +471,24 @@ function getOrCreateDeviceIdentity(): { publicKey: string; privateKey: crypto.Ke
   const deviceJsonPath = path.join(openclawHome, "identity", "device.json");
   try {
     const raw = fs.readFileSync(deviceJsonPath, "utf-8");
-    const json = JSON.parse(raw) as { deviceId?: string; publicKeyPem?: string; privateKeyPem?: string };
-    if (json.deviceId && json.publicKeyPem && json.privateKeyPem) {
-      const privateKey = crypto.createPrivateKey(json.privateKeyPem);
-      const publicKey = crypto.createPublicKey(json.publicKeyPem);
+    const json = JSON.parse(raw) as { deviceId?: string; publicKeyPem?: string; privateKeyPem?: string; publicKey?: string; privateKey?: string };
+    const privPem = json.privateKeyPem || json.privateKey;
+    const pubPem = json.publicKeyPem || json.publicKey;
+
+    if (json.deviceId && pubPem && privPem) {
+      const privateKey = crypto.createPrivateKey(privPem);
+      const publicKey = crypto.createPublicKey(pubPem);
       const publicKeyRaw = publicKey.export({ type: "spki", format: "der" });
       const rawBytes = publicKeyRaw.subarray(12);
       const publicKeyB64Url = rawBytes.toString("base64url");
       cachedDeviceIdentity = { publicKey: publicKeyB64Url, privateKey, deviceId: json.deviceId };
       return cachedDeviceIdentity;
+    } else {
+      console.warn(`[a2a-gateway] device.json exists at ${deviceJsonPath} but is missing required fields. Found keys:`, Object.keys(json));
     }
-  } catch {
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[a2a-gateway] Failed to load device.json from ${deviceJsonPath}, falling back to ephemeral key. Reason: ${msg}`);
     // Fall through to ephemeral key generation
   }
 
@@ -552,54 +559,54 @@ class GatewayRpcConnection {
 
     try {
       await new Promise<void>((resolve, reject) => {
-      let settled = false;
+        let settled = false;
 
-      const cleanup = () => {
-        socket.removeEventListener("open", onOpen);
-        socket.removeEventListener("error", onError);
-        socket.removeEventListener("close", onClose);
-      };
+        const cleanup = () => {
+          socket.removeEventListener("open", onOpen);
+          socket.removeEventListener("error", onError);
+          socket.removeEventListener("close", onClose);
+        };
 
-      const settle = (error?: Error) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timer);
-        cleanup();
-        if (error) {
-          this.rejectConnectChallenge(error);
-          reject(error);
-          return;
-        }
-        resolve();
-      };
+        const settle = (error?: Error) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          clearTimeout(timer);
+          cleanup();
+          if (error) {
+            this.rejectConnectChallenge(error);
+            reject(error);
+            return;
+          }
+          resolve();
+        };
 
-      const onOpen = () => {
-        settle();
-      };
+        const onOpen = () => {
+          settle();
+        };
 
-      const onError = () => {
-        settle(new Error("failed to open gateway websocket"));
-      };
+        const onError = () => {
+          settle(new Error("failed to open gateway websocket"));
+        };
 
-      const onClose = () => {
-        settle(new Error("gateway websocket closed during connect"));
-      };
+        const onClose = () => {
+          settle(new Error("gateway websocket closed during connect"));
+        };
 
-      const timer = setTimeout(() => {
-        settle(new Error("gateway websocket connect timed out"));
-      }, GATEWAY_CONNECT_TIMEOUT_MS);
+        const timer = setTimeout(() => {
+          settle(new Error("gateway websocket connect timed out"));
+        }, GATEWAY_CONNECT_TIMEOUT_MS);
 
-      socket.addEventListener("open", onOpen);
-      socket.addEventListener("error", onError);
-      socket.addEventListener("close", onClose);
+        socket.addEventListener("open", onOpen);
+        socket.addEventListener("error", onError);
+        socket.addEventListener("close", onClose);
       });
 
       // OpenClaw Gateway uses a challenge event before accepting connect.
       await challengePromise;
     } catch (error) {
-      await challengePromise.catch(() => {});
+      await challengePromise.catch(() => { });
       throw error;
     }
 
@@ -1249,6 +1256,7 @@ export class OpenClawAgentExecutor implements AgentExecutor {
     const config = asObject(this.api.config) || {};
     const gateway = asObject(config.gateway) || {};
     const gatewayAuth = asObject(gateway.auth) || {};
+    const gatewayRemote = asObject(gateway.remote) || {};
     const hooks = asObject(config.hooks) || {};
     const gatewayTls = asObject(gateway.tls) || {};
 
@@ -1256,11 +1264,13 @@ export class OpenClawAgentExecutor implements AgentExecutor {
     const tlsEnabled = gatewayTls.enabled === true;
     const scheme = tlsEnabled ? "wss" : "ws";
 
+    const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN || asString(gatewayRemote.token) || asString(gatewayAuth.token) || "";
+
     return {
       port,
       wsUrl: `${scheme}://localhost:${port}`,
       hooksWakeUrl: `http://localhost:${port}/hooks/wake`,
-      gatewayToken: asString(gatewayAuth.token) || "",
+      gatewayToken,
       gatewayPassword: asString(gatewayAuth.password) || "",
       hooksToken: asString(hooks.token) || "",
     };

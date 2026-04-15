@@ -22,7 +22,7 @@
  *   Parallels Between Microbial and Multi-Agent Systems" MIT CSAIL TR.
  */
 
-import type { DnsDiscoveryManager, DiscoveryLogFn } from "./dns-discovery.js";
+import type { IDiscoveryManager, DiscoveryLogFn } from "./dns-discovery.js";
 
 // ---------------------------------------------------------------------------
 // Public interfaces
@@ -86,7 +86,7 @@ const DEFAULT_EXPLORE_INTERVAL_MS = 10_000;
  * QS switching in natural microbial populations.
  */
 export class QuorumDiscoveryManager {
-  private readonly dns: DnsDiscoveryManager;
+  private readonly dns: IDiscoveryManager;
   private readonly activateThreshold: number;
   private readonly deactivateThreshold: number;
   private readonly stableIntervalMs: number;
@@ -98,7 +98,7 @@ export class QuorumDiscoveryManager {
   private running = false;
 
   constructor(
-    dns: DnsDiscoveryManager,
+    dns: IDiscoveryManager,
     config: QuorumConfig,
     log: DiscoveryLogFn,
   ) {
@@ -165,8 +165,8 @@ export class QuorumDiscoveryManager {
       : this.exploreIntervalMs;
   }
 
-  /** Access the wrapped DNS discovery manager. */
-  getDnsManager(): DnsDiscoveryManager {
+  /** Access the wrapped discovery manager. */
+  getDnsManager(): IDiscoveryManager {
     return this.dns;
   }
 

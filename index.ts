@@ -7,6 +7,7 @@
  */
 
 import type { Server } from "node:http";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -21,12 +22,16 @@ import { buildAgentCard } from "./src/agent-card.js";
 import { A2AClient } from "./src/client.js";
 import {
   DnsDiscoveryManager,
+  IDiscoveryManager,
   mergeWithStaticPeers,
   parseDnsDiscoveryConfig,
 } from "./src/dns-discovery.js";
+import { HttpDiscoveryManager } from "./src/http-discovery.js";
+import type { HttpDiscoveryConfig } from "./src/http-discovery.js";
 import {
   MdnsResponder,
   buildMdnsAdvertiseConfig,
+  sanitizeInstanceName,
 } from "./src/dns-responder.js";
 import { OpenClawAgentExecutor } from "./src/executor.js";
 import { QueueingAgentExecutor } from "./src/queueing-executor.js";
@@ -39,6 +44,7 @@ import { PeerHealthManager } from "./src/peer-health.js";
 import { PushNotificationStore } from "./src/push-notifications.js";
 import type {
   AgentCardConfig,
+  AgentSkillConfig,
   GatewayConfig,
   InboundAuth,
   OpenClawPluginApi,
@@ -323,6 +329,22 @@ const plugin = {
 
   register(api: OpenClawPluginApi) {
     const config = parseConfig(api.pluginConfig, api.resolvePath?.bind(api));
+
+    // ── Soul persistence: load persisted AgentCard state from disk ──
+    const soulStatePath = path.join(os.homedir(), ".openclaw", "agent-card-state.json");
+    try {
+      const raw = fs.readFileSync(soulStatePath, "utf-8");
+      const saved = JSON.parse(raw) as AgentCardConfig;
+      if (saved && typeof saved.name === "string" && saved.name) {
+        config.agentCard.name = saved.name;
+        if (saved.description != null) config.agentCard.description = saved.description;
+        if (Array.isArray(saved.skills)) config.agentCard.skills = saved.skills;
+        api.logger.info(`a2a-gateway: Soul restored from disk (${soulStatePath})`);
+      }
+    } catch {
+      // No persisted state or parse error — use static config as-is
+    }
+
     const telemetry = new GatewayTelemetry(api.logger, {
       structuredLogs: config.observability.structuredLogs,
     });
@@ -336,7 +358,8 @@ const plugin = {
       config.limits,
       config.routing.defaultAgentId,
     );
-    const agentCard = buildAgentCard(config);
+    // Use `let` so we can hot-swap the card when the control plane pushes updates
+    let agentCard = buildAgentCard(config);
 
     // Peer resilience: health check + circuit breaker
     const healthManager = config.peers.length > 0
@@ -381,9 +404,51 @@ const plugin = {
         api.logger.info(details ? `${msg}: ${JSON.stringify(details)}` : msg);
       }
     };
-    const dnsManager = config.discovery.enabled
-      ? new DnsDiscoveryManager(config.discovery, discoveryLog)
-      : null;
+    // ── Soul injection callback: fired by HttpDiscoveryManager when it
+    //    discovers our own entry (matched via /workspace/.a2a WHOAMI) ──
+    const handleSelfDiscovered = (newCardConfig: AgentCardConfig) => {
+      // Diff check: only update if something actually changed
+      const oldJson = JSON.stringify({ n: config.agentCard.name, d: config.agentCard.description, s: config.agentCard.skills });
+      const newJson = JSON.stringify({ n: newCardConfig.name, d: newCardConfig.description, s: newCardConfig.skills });
+      if (oldJson === newJson) return; // No change, skip
+
+      // 1. Update in-memory config
+      config.agentCard.name = newCardConfig.name;
+      config.agentCard.description = newCardConfig.description;
+      config.agentCard.skills = newCardConfig.skills;
+
+      // 2. Rebuild the AgentCard object
+      agentCard = buildAgentCard(config);
+
+      // 3. Update the request handler's card reference
+      (requestHandler as any).agentCard = agentCard;
+
+      // 4. Persist to disk for crash recovery
+      try {
+        const dir = path.dirname(soulStatePath);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(soulStatePath, JSON.stringify(newCardConfig, null, 2), "utf-8");
+      } catch (err) {
+        api.logger.warn(`a2a-gateway: Failed to persist soul state: ${err instanceof Error ? err.message : String(err)}`);
+      }
+
+      api.logger.info(`a2a-gateway: Soul successfully injected/updated from control plane — name="${newCardConfig.name}", skills=${newCardConfig.skills.length}`);
+
+      // 5. Re-advertise via mDNS with the updated name (if enabled)
+      config.advertise.instanceName = sanitizeInstanceName(newCardConfig.name);
+      config.advertise.txt.name = newCardConfig.name;
+      mdnsResponder?.restart();
+    };
+
+    let dnsManager: IDiscoveryManager | null = null;
+    if (config.discovery.enabled) {
+      if (config.discovery.type === "http") {
+        const httpConfig: HttpDiscoveryConfig = { ...config.discovery, onSelfDiscovered: handleSelfDiscovered };
+        dnsManager = new HttpDiscoveryManager(httpConfig, discoveryLog);
+      } else {
+        dnsManager = new DnsDiscoveryManager(config.discovery, discoveryLog);
+      }
+    }
 
     // Bio-inspired Quorum Sensing: when quorum config is present, wrap DNS
     // discovery with density-aware adaptive polling (bacterial QS analogy).
@@ -463,7 +528,12 @@ const plugin = {
     // SDK expects userBuilder(req) -> Promise<User>
     // When bearer auth is configured, validate the Authorization header.
     const userBuilder = async (req: { headers?: Record<string, string | string[] | undefined> }) => {
-      if (config.security.inboundAuth === "bearer" && config.security.validTokens.size > 0) {
+      if (config.security.inboundAuth === "bearer") {
+        if (config.security.validTokens.size === 0) {
+          telemetry.recordSecurityRejection("http", "gateway token missing");
+          auditLogger.recordSecurityEvent("http", "gateway token missing");
+          throw jsonRpcError(null, -32000, "Unauthorized: gateway token missing");
+        }
         const authHeader = req.headers?.authorization;
         const header = Array.isArray(authHeader) ? authHeader[0] : authHeader;
         const providedToken = typeof header === "string" && header.startsWith("Bearer ") ? header.slice(7) : "";
@@ -539,7 +609,11 @@ const plugin = {
         config.observability.metricsPath,
         createHttpMetricsMiddleware("metrics"),
         (req, res, next) => {
-          if (config.observability.metricsAuth === "bearer" && config.security.validTokens.size > 0) {
+          if (config.observability.metricsAuth === "bearer") {
+            if (config.security.validTokens.size === 0) {
+              res.status(401).json({ error: "Unauthorized: gateway token missing" });
+              return;
+            }
             const authHeader = req.headers.authorization;
             const header = Array.isArray(authHeader) ? authHeader[0] : authHeader;
             const token = typeof header === "string" && header.startsWith("Bearer ") ? header.slice(7) : "";
@@ -558,7 +632,11 @@ const plugin = {
 
     // Bearer auth middleware for push notification endpoints
     const pushAuthMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-      if (config.security.inboundAuth === "bearer" && config.security.validTokens.size > 0) {
+      if (config.security.inboundAuth === "bearer") {
+        if (config.security.validTokens.size === 0) {
+          res.status(401).json({ error: "Unauthorized: gateway token missing" });
+          return;
+        }
         const authHeader = req.headers.authorization;
         const header = Array.isArray(authHeader) ? authHeader[0] : authHeader;
         const token = typeof header === "string" && header.startsWith("Bearer ") ? header.slice(7) : "";

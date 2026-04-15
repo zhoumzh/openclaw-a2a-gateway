@@ -73,9 +73,20 @@ export interface SecurityConfig extends FileSecurityConfig {
 
 export interface DnsDiscoveryConfig {
   enabled: boolean;
+  /** Discovery mode: "dns" for local mDNS/DNS-SD, "http" for external registry. Default: "dns" */
+  type?: "dns" | "http";
+  
+  // -- DNS-SD Options --
   /** DNS-SD service name to query. Default: "_a2a._tcp.local" */
   serviceName: string;
-  /** How often to re-query DNS (ms). Default: 30000 (30s). */
+  
+  // -- HTTP Registry Options --
+  /** URL of the HTTP registry to poll for peers (required if type === "http") */
+  httpRegistryUrl?: string;
+  /** Optional Bearer token for HTTP registry authentication */
+  httpRegistryToken?: string;
+
+  /** How often to re-query DNS or HTTP (ms). Default: 30000 (30s). */
   refreshIntervalMs: number;
   /** Whether discovered peers supplement static config peers. Default: true. */
   mergeWithStatic: boolean;
