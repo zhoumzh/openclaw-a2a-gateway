@@ -8,16 +8,54 @@
 
 ## 目录
 
-1. [HTTP 注册中心发现](#1-http-注册中心发现)
-2. [灵魂注入：AgentCard 动态热重载](#2-灵魂注入agentcard-动态热重载)
-3. [入站鉴权 Fail-Closed 加固](#3-入站鉴权-fail-closed-加固)
-4. [沙箱环境兼容性修复](#4-沙箱环境兼容性修复)
-5. [注册中心 JSON 格式规范](#5-注册中心-json-格式规范)
-6. [故障排查](#6-故障排查)
+1. [安装](#1-安装)
+2. [HTTP 注册中心发现](#2-http-注册中心发现)
+3. [灵魂注入：AgentCard 动态热重载](#3-灵魂注入agentcard-动态热重载)
+4. [入站鉴权 Fail-Closed 加固](#4-入站鉴权-fail-closed-加固)
+5. [沙箱环境兼容性修复](#5-沙箱环境兼容性修复)
+6. [注册中心 JSON 格式规范](#6-注册中心-json-格式规范)
+7. [故障排查](#7-故障排查)
 
 ---
 
-## 1. HTTP 注册中心发现
+## 1. 安装
+
+### 一键安装（推荐）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zhoumzh/openclaw-a2a-gateway/develop/install.sh | bash
+```
+
+安装时同步配置 HTTP 发现注册中心：
+
+```bash
+REGISTRY_URL="https://your-registry.example.com/agents" \
+  curl -fsSL https://raw.githubusercontent.com/zhoumzh/openclaw-a2a-gateway/develop/install.sh | bash
+```
+
+### 安装逻辑
+
+| 步骤 | 操作 |
+|------|------|
+| 1 | 检查 `openclaw` CLI 是否可用（不可用则退出） |
+| 2 | Clone 仓库到 `~/.openclaw/workspace/plugins/a2a-gateway`；已存在时执行 `git pull` |
+| 3 | `npm install --production` |
+| 4 | `openclaw plugins install` 注册插件 |
+| 5 | 若传入 `REGISTRY_URL` 则自动写入发现配置 |
+| 6 | `openclaw gateway restart` |
+
+脚本幂等，可重复执行。
+
+### 安装后验证
+
+```bash
+openclaw plugins list
+curl -s http://localhost:18800/.well-known/agent.json | python3 -m json.tool
+```
+
+---
+
+## 2. HTTP 注册中心发现
 
 ### 背景
 
@@ -79,7 +117,7 @@ GET httpRegistryUrl  →  JSON 数组
 
 ---
 
-## 2. 灵魂注入：AgentCard 动态热重载
+## 3. 灵魂注入：AgentCard 动态热重载
 
 ### 背景
 
@@ -154,7 +192,7 @@ cat ~/.openclaw/agent-card-state.json
 
 ---
 
-## 3. 入站鉴权 Fail-Closed 加固
+## 4. 入站鉴权 Fail-Closed 加固
 
 ### 问题
 
@@ -184,9 +222,9 @@ openclaw config set plugins.entries.a2a-gateway.config.security.token '"your-str
 
 ---
 
-## 4. 沙箱环境兼容性修复
+## 5. 沙箱环境兼容性修复
 
-### 4.1 Gateway Token 多路径回退
+### 5.1 Gateway Token 多路径回退
 
 在 E2B 等沙箱中，OpenClaw Plugin SDK 会在运行时脱敏 `api.config.gateway.auth.token`，导致插件无法读取到合法 token 从而无法连接本机 RPC 网关。
 
@@ -204,7 +242,7 @@ openclaw config set plugins.entries.a2a-gateway.config.security.token '"your-str
 export OPENCLAW_GATEWAY_TOKEN="your-gateway-token"
 ```
 
-### 4.2 设备身份兼容性
+### 5.2 设备身份兼容性
 
 OpenClaw ≥ 2026.3.13 版本对 `~/.openclaw/identity/device.json` 的密钥字段名进行了变更（`publicKeyPem` → `publicKey`）。原始代码在字段名不匹配时会静默生成临时随机密钥对，导致 `operator.write` 权限被安全机制剥离。
 
@@ -221,7 +259,7 @@ cat ~/.openclaw/identity/device.json | jq 'keys'
 
 ---
 
-## 5. 注册中心 JSON 格式规范
+## 6. 注册中心 JSON 格式规范
 
 HTTP 注册中心端点需返回一个 JSON 数组，每个元素格式如下：
 
@@ -289,7 +327,7 @@ interface RegistryEntry {
 
 ---
 
-## 6. 故障排查
+## 7. 故障排查
 
 ### 灵魂注入未触发
 
