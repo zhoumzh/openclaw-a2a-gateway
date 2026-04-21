@@ -352,8 +352,9 @@ const plugin = {
     const pushStore = new PushNotificationStore();
     const client = new A2AClient();
     const taskStore = new FileTaskStore(config.storage.tasksDir);
+    const agentExecutor = new OpenClawAgentExecutor(api, config);
     const executor = new QueueingAgentExecutor(
-      new OpenClawAgentExecutor(api, config),
+      agentExecutor,
       telemetry,
       config.limits,
       config.routing.defaultAgentId,
@@ -1059,6 +1060,7 @@ const plugin = {
         healthManager?.stop();
         auditLogger.close();
         client.destroy();
+        agentExecutor.close();
 
         // Stop task cleanup timer
         if (cleanupTimer) {
