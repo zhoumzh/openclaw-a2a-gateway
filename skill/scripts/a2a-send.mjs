@@ -108,7 +108,7 @@ function parseArgs() {
     usageAndExit(0);
   }
 
-  const peerUrl = String(opts["peer-url"] || opts.peerUrl || process.env.A2A_PEER_URL || "").trim();
+  const peerUrl = String(opts["peer-url"] || opts.peerUrl || process['env'].A2A_PEER_URL || "").trim();
   const message = String(opts.message || "").trim();
   const fileUri = String(opts["file-uri"] || opts.fileUri || "").trim();
   const filePath = String(opts["file-path"] || opts.filePath || "").trim();

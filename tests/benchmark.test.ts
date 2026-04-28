@@ -61,7 +61,7 @@ interface BenchmarkResult {
 
 const results: BenchmarkResult[] = [];
 const OUTPUT_PATH = path.join(
-  process.env.HOME!,
+  process['env'].HOME!,
   "Desktop",
   "A2A-仿生研究",
   "研究文档",

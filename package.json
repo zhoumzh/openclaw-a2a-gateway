@@ -31,9 +31,12 @@
     "ws": "^8.20.0"
   },
   "openclaw": {
+    "id": "a2a-gateway",
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "hooks": [],
+    "permissions": ["env", "net", "read", "write"]
   },
   "devDependencies": {
     "@types/express": "^5.0.6",

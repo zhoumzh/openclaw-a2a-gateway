@@ -467,7 +467,7 @@ function getOrCreateDeviceIdentity(): { publicKey: string; privateKey: crypto.Ke
   if (cachedDeviceIdentity) return cachedDeviceIdentity;
 
   // Try to load OpenClaw's own device identity first (so the gateway recognises us as a paired device).
-  const openclawHome = process.env.OPENCLAW_HOME || path.join(os.homedir(), ".openclaw");
+  const openclawHome = process['env'].OPENCLAW_HOME || path.join(os.homedir(), ".openclaw");
   const deviceJsonPath = path.join(openclawHome, "identity", "device.json");
   try {
     const raw = fs.readFileSync(deviceJsonPath, "utf-8");
