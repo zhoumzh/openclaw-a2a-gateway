@@ -317,23 +317,37 @@
       "discovery": {
         "type": "object",
         "additionalProperties": false,
-        "description": "DNS-SD based dynamic agent discovery. Disabled by default. When enabled, the gateway queries DNS SRV + TXT records to find peer agents on the local network.",
+        "description": "Dynamic agent discovery. Supports DNS-SD for local networks and HTTP registry polling for cloud/container environments.",
         "properties": {
           "enabled": {
             "type": "boolean",
             "default": false,
-            "description": "Enable DNS-SD based peer discovery"
+            "description": "Enable dynamic peer discovery"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["dns", "http"],
+            "default": "dns",
+            "description": "Discovery mode: DNS-SD for local networks, or HTTP registry polling for cloud/container environments"
           },
           "serviceName": {
             "type": "string",
             "default": "_a2a._tcp.local",
             "description": "DNS-SD service name to query for SRV records"
           },
+          "httpRegistryUrl": {
+            "type": "string",
+            "description": "HTTP registry URL to poll for peer discovery when discovery.type is set to 'http'"
+          },
+          "httpRegistryToken": {
+            "type": "string",
+            "description": "Optional Bearer token for authenticating to the HTTP registry"
+          },
           "refreshIntervalMs": {
             "type": "number",
             "default": 30000,
             "minimum": 1000,
-            "description": "How often to re-query DNS for peer discovery (milliseconds)"
+            "description": "How often to refresh discovery results from DNS or HTTP registry (milliseconds)"
           },
           "mergeWithStatic": {
             "type": "boolean",
