@@ -41,6 +41,39 @@ export class HttpDiscoveryManager implements IDiscoveryManager {
     }
     this.running = true;
 
+    // ----- LOCAL FIRST SELF-DISCOVERY -----
+    if (this.config.onSelfDiscovered) {
+      try {
+        const content = fs.readFileSync("/workspace/.a2a", "utf-8");
+        const kvs: Record<string, string> = {};
+        for (const line of content.split("\n")) {
+          const match = line.match(/^([^=]+)=(.*)$/);
+          if (match) {
+            kvs[match[1].trim()] = match[2].trim();
+          }
+        }
+        
+        if (kvs["WHOAMI"] || kvs["NAME"]) {
+          const name = kvs["NAME"] || "Local Agent";
+          const description = kvs["DESCRIPTION"] || undefined;
+          const skillsRaw = kvs["SKILLS"];
+          const skills = skillsRaw
+            ? skillsRaw.split(",").map(s => s.trim()).filter(Boolean)
+            : [];
+
+          this.config.onSelfDiscovered({
+            name,
+            description,
+            skills,
+          });
+          this.log("info", "http-discovery.self-inject-success", { name, skillsCount: skills.length });
+        }
+      } catch (err) {
+        this.log("warn", "http-discovery.self-inject-failed", { error: String(err) });
+      }
+    }
+    // --------------------------------------
+
     this.log("info", "http-discovery.start", {
       registryUrl: this.config.httpRegistryUrl,
       refreshIntervalMs: this.config.refreshIntervalMs,
@@ -109,20 +142,18 @@ export class HttpDiscoveryManager implements IDiscoveryManager {
       throw new Error(`Registry responded with status ${res.status} ${res.statusText}`);
     }
 
-    const data = await res.json();
-    if (!Array.isArray(data)) {
-      throw new Error("Invalid registry response: expected JSON array");
+    let rawData = await res.json();
+    let data = rawData;
+    
+    // Unwrap the enterprise API envelope if present
+    if (rawData && typeof rawData === "object" && !Array.isArray(rawData)) {
+      if (rawData.data && Array.isArray(rawData.data.dependencies)) {
+        data = rawData.data.dependencies;
+      }
     }
 
-    let whoami: string | null = null;
-    try {
-      const content = fs.readFileSync("/workspace/.a2a", "utf-8");
-      const match = content.match(/^WHOAMI=(.+)$/m);
-      if (match && match[1]) {
-        whoami = match[1].trim();
-      }
-    } catch {
-      // Ignore if file is missing or unreadable
+    if (!Array.isArray(data)) {
+      throw new Error("Invalid registry response: expected JSON array or { data: { dependencies: [] } } envelope");
     }
 
     const now = Date.now();
@@ -131,27 +162,15 @@ export class HttpDiscoveryManager implements IDiscoveryManager {
     for (const item of data) {
       if (!item || typeof item !== "object") continue;
 
-      if (whoami && item.id === whoami && this.config.onSelfDiscovered) {
-        try {
-          const cardConfig: AgentCardConfig = {
-            name: typeof item.name === "string" ? item.name : "",
-            description: typeof item.description === "string" ? item.description : undefined,
-            skills: Array.isArray(item.skills) ? item.skills.map((s: any) => {
-              if (typeof s === "string") return s;
-              return {
-                id: s?.id,
-                name: s?.name,
-                description: s?.description
-              };
-            }) : [],
-          };
-          this.config.onSelfDiscovered(cardConfig);
-        } catch (err) {
-          this.log("warn", "http-discovery.self-inject-failed", { error: String(err) });
-        }
+      // Extract or infer agentCardUrl
+      let agentCardUrl = typeof item.agentCardUrl === "string" ? item.agentCardUrl : "";
+      if (!agentCardUrl && typeof item.host === "string" && item.host) {
+        // Fallback: Infer agentCardUrl from the provided host
+        // Ensure host doesn't end with a slash before appending the standard path
+        const baseHost = item.host.endsWith("/") ? item.host.slice(0, -1) : item.host;
+        agentCardUrl = `${baseHost}/.well-known/agent-card`;
       }
-
-      const agentCardUrl = typeof item.agentCardUrl === "string" ? item.agentCardUrl : "";
+      
       if (!agentCardUrl) continue; // agentCardUrl is strictly required
 
       let host = "";
@@ -186,6 +205,9 @@ export class HttpDiscoveryManager implements IDiscoveryManager {
         if ((typeRaw === "bearer" || typeRaw === "apiKey") && token) {
           peer.auth = { type: typeRaw, token };
         }
+      } else if (typeof item.token === "string" && item.token) {
+        // Fallback: If registry only returns a flat 'token' string, wrap it as bearer
+        peer.auth = { type: "bearer", token: item.token };
       }
 
       newPeers.push(peer);

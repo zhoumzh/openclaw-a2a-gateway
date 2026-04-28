@@ -42,14 +42,3 @@ if [ -n "${REGISTRY_URL:-}" ]; then
   openclaw config set plugins.entries.a2a-gateway.config.discovery.httpRegistryUrl "\"${REGISTRY_URL}\""
   echo "    Registry URL configured: ${REGISTRY_URL}"
 fi
-
-# 6. 重启网关
-echo "==> Restarting OpenClaw gateway..."
-openclaw gateway restart
-
-echo ""
-echo "[OK] openclaw-a2a-gateway (extended) installed successfully."
-echo ""
-echo "Verify:"
-echo "  openclaw plugins list"
-echo "  curl -s http://localhost:18800/.well-known/agent.json | python3 -m json.tool"
