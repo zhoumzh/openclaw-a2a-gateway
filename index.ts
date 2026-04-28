@@ -328,6 +328,7 @@ const plugin = {
   description: "OpenClaw plugin that serves A2A v0.3.0 endpoints",
 
   register(api: OpenClawPluginApi) {
+    api.logger.info(`a2a-gateway: register() invoked; registerService=${String(Boolean(api.registerService))}`);
     const config = parseConfig(api.pluginConfig, api.resolvePath?.bind(api));
 
     // ── Soul persistence: load persisted AgentCard state from disk ──
@@ -935,7 +936,9 @@ const plugin = {
     api.registerService({
       id: "a2a-gateway",
       async start(_ctx) {
+        api.logger.info("a2a-gateway: registerService.start() invoked");
         if (server) {
+          api.logger.info("a2a-gateway: service start skipped because server is already running");
           return;
         }
 
