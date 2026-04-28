@@ -1529,7 +1529,7 @@ export class OpenClawAgentExecutor implements AgentExecutor {
     const tlsEnabled = gatewayTls.enabled === true;
     const scheme = tlsEnabled ? "wss" : "ws";
 
-    const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN || asString(gatewayRemote.token) || asString(gatewayAuth.token) || "";
+    const gatewayToken = process["env"].OPENCLAW_GATEWAY_TOKEN || asString(gatewayRemote.token) || asString(gatewayAuth.token) || "";
 
     return {
       port,
