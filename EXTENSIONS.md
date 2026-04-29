@@ -29,7 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/zhoumzh/openclaw-a2a-gateway/develo
 安装时同步配置 HTTP 发现注册中心：
 
 ```bash
-REGISTRY_URL="https://your-registry.example.com/agents" \
+REGISTRY_URL="https://your-registry.example.com" \
   curl -fsSL https://raw.githubusercontent.com/zhoumzh/openclaw-a2a-gateway/develop/install.sh | bash
 ```
 
@@ -74,8 +74,9 @@ curl -s http://localhost:18800/.well-known/agent.json | python3 -m json.tool
 openclaw config set plugins.entries.a2a-gateway.config.discovery.enabled true
 openclaw config set plugins.entries.a2a-gateway.config.discovery.type '"http"'
 
-# 2. 注册中心地址（必填，需返回符合规范的 JSON 数组，见第 5 节）
-openclaw config set plugins.entries.a2a-gateway.config.discovery.httpRegistryUrl '"https://your-registry.example.com/agents"'
+# 2. 注册中心主机或 API Base URL（必填）
+#    运行时会自动拼接 /agents/{WHOAMI}/discovery
+openclaw config set plugins.entries.a2a-gateway.config.discovery.httpRegistryUrl '"https://your-registry.example.com"'
 
 # 3. 注册中心 Bearer Token（可选）
 openclaw config set plugins.entries.a2a-gateway.config.discovery.httpRegistryToken '"your-registry-token"'
@@ -91,7 +92,7 @@ openclaw config set plugins.entries.a2a-gateway.config.discovery.refreshInterval
   "discovery": {
     "enabled": true,
     "type": "http",
-    "httpRegistryUrl": "https://your-registry.example.com/agents",
+    "httpRegistryUrl": "https://your-registry.example.com",
     "httpRegistryToken": "optional-bearer-token",
     "refreshIntervalMs": 30000,
     "mergeWithStatic": true
@@ -106,7 +107,7 @@ openclaw config set plugins.entries.a2a-gateway.config.discovery.refreshInterval
 ```
 每隔 refreshIntervalMs
     ↓
-GET httpRegistryUrl  →  JSON 数组
+GET httpRegistryUrl + "/agents/{WHOAMI}/discovery"  →  JSON 数组
     ↓
 解析每个节点的 agentCardUrl / name / auth
     ↓

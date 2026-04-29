@@ -81,7 +81,7 @@ export interface DnsDiscoveryConfig {
   serviceName: string;
   
   // -- HTTP Registry Options --
-  /** URL of the HTTP registry to poll for peers (required if type === "http") */
+  /** Registry host/base URL. Discovery appends `/agents/{WHOAMI}/discovery` at runtime. */
   httpRegistryUrl?: string;
   /** Optional Bearer token for HTTP registry authentication */
   httpRegistryToken?: string;

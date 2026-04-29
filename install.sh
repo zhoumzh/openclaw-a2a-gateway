@@ -35,11 +35,11 @@ npm install --production --prefix "${INSTALL_DIR}"
 echo "==> Registering plugin with OpenClaw..."
 openclaw plugins install "${INSTALL_DIR}"
 
-# 5. 配置注册中心地址（若提供了 REGISTRY_URL）
+# 5. 配置注册中心主机地址（若提供了 REGISTRY_URL）
 if [ -n "${REGISTRY_URL:-}" ]; then
   echo "==> Configuring HTTP discovery registry..."
   openclaw config set plugins.entries.a2a-gateway.config.discovery.enabled true
   openclaw config set plugins.entries.a2a-gateway.config.discovery.type '"http"'
   openclaw config set plugins.entries.a2a-gateway.config.discovery.httpRegistryUrl "\"${REGISTRY_URL}\""
-  echo "    Registry URL configured: ${REGISTRY_URL}"
+  echo "    Registry host/base URL configured: ${REGISTRY_URL}"
 fi

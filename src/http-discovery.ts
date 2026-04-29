@@ -1,12 +1,103 @@
 import type { IDiscoveryManager, DiscoveredPeer, DnsDiscoveryConfig, DiscoveryLogFn } from "./dns-discovery.js";
 import type { PeerConfig } from "./types.js";
 import { discoveredPeerToConfig } from "./dns-discovery.js";
+import { loadSelfIdentity, type SelfIdentity } from "./self-identity.js";
 
 /**
  * Extended config for HTTP registry discovery.
  * Kept as a named extension point for HTTP registry-specific options.
  */
 export interface HttpDiscoveryConfig extends DnsDiscoveryConfig {}
+
+export function resolveHttpRegistryAgentId(identity?: Pick<SelfIdentity, "whoami" | "slug" | "name">): string | undefined {
+  const raw = identity?.whoami || identity?.slug || identity?.name || "";
+  const value = raw.trim();
+  return value || undefined;
+}
+
+export function buildHttpRegistryUrl(configuredUrl: string, agentId?: string): string | undefined {
+  const raw = configuredUrl.trim();
+  if (!raw) return undefined;
+
+  if (raw.includes("{agentId}")) {
+    if (!agentId) return undefined;
+    return raw.replaceAll("{agentId}", encodeURIComponent(agentId));
+  }
+
+  const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  const parsed = new URL(withProtocol);
+  const normalizedPath = parsed.pathname.replace(/\/+$/, "");
+
+  if (/\/agents\/[^/]+\/discovery$/i.test(normalizedPath)) {
+    return parsed.toString();
+  }
+
+  if (!agentId) return undefined;
+
+  if (!normalizedPath || normalizedPath === "/") {
+    parsed.pathname = `/agents/${encodeURIComponent(agentId)}/discovery`;
+    return parsed.toString();
+  }
+
+  if (/\/agents$/i.test(normalizedPath)) {
+    parsed.pathname = `${normalizedPath}/${encodeURIComponent(agentId)}/discovery`;
+    return parsed.toString();
+  }
+
+  parsed.pathname = `${normalizedPath}/agents/${encodeURIComponent(agentId)}/discovery`;
+  return parsed.toString();
+}
+
+export function unwrapHttpRegistryPayload(rawData: unknown): unknown[] {
+  if (Array.isArray(rawData)) {
+    return rawData;
+  }
+
+  if (rawData && typeof rawData === "object") {
+    const record = rawData as Record<string, unknown>;
+    if (record.data && typeof record.data === "object") {
+      const data = record.data as Record<string, unknown>;
+      if (Array.isArray(data.dependencies)) {
+        return data.dependencies;
+      }
+      if (Array.isArray(data.items)) {
+        return data.items;
+      }
+    }
+
+    if (Array.isArray(record.items)) {
+      return record.items;
+    }
+  }
+
+  throw new Error("Invalid registry response: expected JSON array or { data: { dependencies/items: [] } } envelope");
+}
+
+export function resolveDiscoveredAgentCardUrl(item: Record<string, unknown>): string {
+  const direct = typeof item.agentCardUrl === "string" ? item.agentCardUrl.trim() : "";
+  if (direct) {
+    return direct;
+  }
+
+  const host = typeof item.host === "string" ? item.host.trim() : "";
+  if (!host) {
+    return "";
+  }
+
+  try {
+    const parsed = new URL(host);
+    if (parsed.pathname.includes("/.well-known/")) {
+      return parsed.toString();
+    }
+    if (parsed.pathname.endsWith("/a2a/jsonrpc")) {
+      return `${parsed.origin}/.well-known/agent-card.json`;
+    }
+    return `${parsed.origin}/.well-known/agent-card.json`;
+  } catch {
+    const baseHost = host.endsWith("/") ? host.slice(0, -1) : host;
+    return `${baseHost}/.well-known/agent-card.json`;
+  }
+}
 
 /**
  * HTTP Registry-based dynamic agent discovery.
@@ -27,6 +118,16 @@ export class HttpDiscoveryManager implements IDiscoveryManager {
     this.log = log;
   }
 
+  private resolveRegistryUrl(): string | undefined {
+    if (!this.config.httpRegistryUrl) {
+      return undefined;
+    }
+
+    const identityResult = loadSelfIdentity();
+    const agentId = resolveHttpRegistryAgentId(identityResult.identity);
+    return buildHttpRegistryUrl(this.config.httpRegistryUrl, agentId);
+  }
+
   /** Begin periodic HTTP registry polling. */
   start(): void {
     if (!this.config.enabled || this.running) return;
@@ -34,10 +135,17 @@ export class HttpDiscoveryManager implements IDiscoveryManager {
       this.log("warn", "http-discovery.start-failed", { error: "Missing httpRegistryUrl" });
       return;
     }
+    const resolvedUrl = this.resolveRegistryUrl();
+    if (!resolvedUrl) {
+      this.log("warn", "http-discovery.start-failed", {
+        error: "Unable to resolve registry discovery URL from httpRegistryUrl + /workspace/.a2a WHOAMI/slug",
+      });
+      return;
+    }
     this.running = true;
 
     this.log("info", "http-discovery.start", {
-      registryUrl: this.config.httpRegistryUrl,
+      registryUrl: resolvedUrl,
       refreshIntervalMs: this.config.refreshIntervalMs,
     });
 
@@ -90,7 +198,10 @@ export class HttpDiscoveryManager implements IDiscoveryManager {
   }
 
   private async discover(): Promise<void> {
-    if (!this.config.httpRegistryUrl) return;
+    const registryUrl = this.resolveRegistryUrl();
+    if (!registryUrl) {
+      throw new Error("Unable to resolve registry discovery URL from httpRegistryUrl + /workspace/.a2a WHOAMI/slug");
+    }
 
     const headers: Record<string, string> = {
       "Accept": "application/json",
@@ -99,24 +210,13 @@ export class HttpDiscoveryManager implements IDiscoveryManager {
       headers["Authorization"] = `Bearer ${this.config.httpRegistryToken}`;
     }
 
-    const res = await fetch(this.config.httpRegistryUrl, { headers });
+    const res = await fetch(registryUrl, { headers });
     if (!res.ok) {
       throw new Error(`Registry responded with status ${res.status} ${res.statusText}`);
     }
 
-    let rawData = await res.json();
-    let data = rawData;
-    
-    // Unwrap the enterprise API envelope if present
-    if (rawData && typeof rawData === "object" && !Array.isArray(rawData)) {
-      if (rawData.data && Array.isArray(rawData.data.dependencies)) {
-        data = rawData.data.dependencies;
-      }
-    }
-
-    if (!Array.isArray(data)) {
-      throw new Error("Invalid registry response: expected JSON array or { data: { dependencies: [] } } envelope");
-    }
+    const rawData = await res.json();
+    const data = unwrapHttpRegistryPayload(rawData);
 
     const now = Date.now();
     const newPeers: DiscoveredPeer[] = [];
@@ -124,15 +224,8 @@ export class HttpDiscoveryManager implements IDiscoveryManager {
     for (const item of data) {
       if (!item || typeof item !== "object") continue;
 
-      // Extract or infer agentCardUrl
-      let agentCardUrl = typeof item.agentCardUrl === "string" ? item.agentCardUrl : "";
-      if (!agentCardUrl && typeof item.host === "string" && item.host) {
-        // Fallback: Infer agentCardUrl from the provided host
-        // Ensure host doesn't end with a slash before appending the standard path
-        const baseHost = item.host.endsWith("/") ? item.host.slice(0, -1) : item.host;
-        agentCardUrl = `${baseHost}/.well-known/agent-card`;
-      }
-      
+      const record = item as Record<string, unknown>;
+      const agentCardUrl = resolveDiscoveredAgentCardUrl(record);
       if (!agentCardUrl) continue; // agentCardUrl is strictly required
 
       let host = "";
@@ -146,8 +239,9 @@ export class HttpDiscoveryManager implements IDiscoveryManager {
       }
 
       // Name fallback logic
-      const rawName = typeof item.name === "string" ? item.name : "";
-      const fallbackName = host.split(".")[0] || "peer";
+      const rawName = typeof record.name === "string" ? record.name : "";
+      const rawId = typeof record.id === "string" ? record.id : "";
+      const fallbackName = rawId || host.split(".")[0] || "peer";
       const peerName = rawName || fallbackName;
 
       const peer: DiscoveredPeer = {
@@ -155,21 +249,21 @@ export class HttpDiscoveryManager implements IDiscoveryManager {
         host,
         port,
         agentCardUrl,
-        protocol: typeof item.protocol === "string" ? item.protocol : "jsonrpc",
+        protocol: typeof record.protocol === "string" ? record.protocol : "jsonrpc",
         discoveredAt: now,
         ttl: (this.config.refreshIntervalMs / 1000) * 2, // TTL is 2x refresh interval to allow 1 missed ping
       };
 
-      if (item.auth && typeof item.auth === "object") {
-        const authRaw = item.auth as Record<string, unknown>;
+      if (record.auth && typeof record.auth === "object") {
+        const authRaw = record.auth as Record<string, unknown>;
         const typeRaw = typeof authRaw.type === "string" ? authRaw.type : "";
         const token = typeof authRaw.token === "string" ? authRaw.token : "";
         if ((typeRaw === "bearer" || typeRaw === "apiKey") && token) {
           peer.auth = { type: typeRaw, token };
         }
-      } else if (typeof item.token === "string" && item.token) {
+      } else if (typeof record.token === "string" && record.token) {
         // Fallback: If registry only returns a flat 'token' string, wrap it as bearer
-        peer.auth = { type: "bearer", token: item.token };
+        peer.auth = { type: "bearer", token: record.token };
       }
 
       newPeers.push(peer);
@@ -179,7 +273,7 @@ export class HttpDiscoveryManager implements IDiscoveryManager {
     this.discoveredPeers = newPeers;
 
     this.log("info", "http-discovery.refreshed", {
-      registryUrl: this.config.httpRegistryUrl,
+      registryUrl,
       activePeers: this.discoveredPeers.length,
       peerNames: this.discoveredPeers.map((p) => p.name),
     });

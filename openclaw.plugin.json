@@ -337,7 +337,7 @@
           },
           "httpRegistryUrl": {
             "type": "string",
-            "description": "HTTP registry URL to poll for peer discovery when discovery.type is set to 'http'"
+            "description": "HTTP registry host or base URL. The gateway appends /agents/{WHOAMI}/discovery at runtime when discovery.type is 'http'"
           },
           "httpRegistryToken": {
             "type": "string",
