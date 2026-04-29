@@ -38,6 +38,7 @@ import { QueueingAgentExecutor } from "./src/queueing-executor.js";
 import { runTaskCleanup } from "./src/task-cleanup.js";
 import { recoverStaleTasks } from "./src/task-recovery.js";
 import { FileTaskStore } from "./src/task-store.js";
+import { loadSelfIdentity, mergeSelfIdentityIntoAgentCard } from "./src/self-identity.js";
 import { GatewayTelemetry } from "./src/telemetry.js";
 import { AuditLogger } from "./src/audit.js";
 import { PeerHealthManager } from "./src/peer-health.js";
@@ -322,6 +323,28 @@ function normalizeCardPath(): string {
   return `/${AGENT_CARD_PATH}`;
 }
 
+function isLoopbackAgentCardUrl(value: string | undefined): boolean {
+  if (!value) return true;
+  try {
+    const parsed = new URL(value);
+    return parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "::1";
+  } catch {
+    return true;
+  }
+}
+
+function inferAgentCardUrlFromRequest(req: express.Request): string {
+  const forwardedHost = req.get("x-forwarded-host") || req.get("host") || "";
+  const host = forwardedHost.split(",")[0]?.trim();
+  if (!host || host.startsWith("localhost") || host.startsWith("127.0.0.1")) {
+    return "";
+  }
+
+  const forwardedProto = req.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  const proto = forwardedProto || (host.includes("openclawpages") ? "https" : req.protocol || "http");
+  return `${proto}://${host}/a2a/jsonrpc`;
+}
+
 const plugin = {
   id: "a2a-gateway",
   name: "A2A Gateway",
@@ -339,11 +362,28 @@ const plugin = {
       if (saved && typeof saved.name === "string" && saved.name) {
         config.agentCard.name = saved.name;
         if (saved.description != null) config.agentCard.description = saved.description;
+        if (typeof saved.url === "string" && saved.url) config.agentCard.url = saved.url;
         if (Array.isArray(saved.skills)) config.agentCard.skills = saved.skills;
         api.logger.info(`a2a-gateway: Soul restored from disk (${soulStatePath})`);
       }
     } catch {
       // No persisted state or parse error — use static config as-is
+    }
+
+    const selfIdentityResult = loadSelfIdentity();
+    if (selfIdentityResult.identity) {
+      const changed = mergeSelfIdentityIntoAgentCard(config.agentCard, selfIdentityResult.identity);
+      config.advertise.instanceName = sanitizeInstanceName(config.agentCard.name);
+      config.advertise.txt.name = config.agentCard.name;
+      api.logger.info(
+        `a2a-gateway: Self identity loaded from ${selfIdentityResult.path}; ` +
+        `name="${config.agentCard.name}", hasUrl=${String(Boolean(config.agentCard.url))}, ` +
+        `skills=${config.agentCard.skills.length}, changed=${String(changed)}`
+      );
+    } else if (selfIdentityResult.error) {
+      api.logger.info(`a2a-gateway: Self identity not loaded from ${selfIdentityResult.path}: ${selfIdentityResult.error}`);
+    } else {
+      api.logger.info(`a2a-gateway: Self identity not present in ${selfIdentityResult.path}`);
     }
 
     const telemetry = new GatewayTelemetry(api.logger, {
@@ -360,8 +400,7 @@ const plugin = {
       config.limits,
       config.routing.defaultAgentId,
     );
-    // Use `let` so we can hot-swap the card when the control plane pushes updates
-    let agentCard = buildAgentCard(config);
+    const agentCard = buildAgentCard(config);
 
     // Peer resilience: health check + circuit breaker
     const healthManager = config.peers.length > 0
@@ -406,46 +445,10 @@ const plugin = {
         api.logger.info(details ? `${msg}: ${JSON.stringify(details)}` : msg);
       }
     };
-    // ── Soul injection callback: fired by HttpDiscoveryManager when it
-    //    discovers our own entry (matched via /workspace/.a2a WHOAMI) ──
-    const handleSelfDiscovered = (newCardConfig: AgentCardConfig) => {
-      // Diff check: only update if something actually changed
-      const oldJson = JSON.stringify({ n: config.agentCard.name, d: config.agentCard.description, s: config.agentCard.skills });
-      const newJson = JSON.stringify({ n: newCardConfig.name, d: newCardConfig.description, s: newCardConfig.skills });
-      if (oldJson === newJson) return; // No change, skip
-
-      // 1. Update in-memory config
-      config.agentCard.name = newCardConfig.name;
-      config.agentCard.description = newCardConfig.description;
-      config.agentCard.skills = newCardConfig.skills;
-
-      // 2. Rebuild the AgentCard object
-      agentCard = buildAgentCard(config);
-
-      // 3. Update the request handler's card reference
-      (requestHandler as any).agentCard = agentCard;
-
-      // 4. Persist to disk for crash recovery
-      try {
-        const dir = path.dirname(soulStatePath);
-        fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(soulStatePath, JSON.stringify(newCardConfig, null, 2), "utf-8");
-      } catch (err) {
-        api.logger.warn(`a2a-gateway: Failed to persist soul state: ${err instanceof Error ? err.message : String(err)}`);
-      }
-
-      api.logger.info(`a2a-gateway: Soul successfully injected/updated from control plane — name="${newCardConfig.name}", skills=${newCardConfig.skills.length}`);
-
-      // 5. Re-advertise via mDNS with the updated name (if enabled)
-      config.advertise.instanceName = sanitizeInstanceName(newCardConfig.name);
-      config.advertise.txt.name = newCardConfig.name;
-      mdnsResponder?.restart();
-    };
-
     let dnsManager: IDiscoveryManager | null = null;
     if (config.discovery.enabled) {
       if (config.discovery.type === "http") {
-        const httpConfig: HttpDiscoveryConfig = { ...config.discovery, onSelfDiscovered: handleSelfDiscovered };
+        const httpConfig: HttpDiscoveryConfig = { ...config.discovery };
         dnsManager = new HttpDiscoveryManager(httpConfig, discoveryLog);
       } else {
         dnsManager = new DnsDiscoveryManager(config.discovery, discoveryLog);
@@ -562,7 +565,22 @@ const plugin = {
       };
 
     const cardPath = normalizeCardPath();
-    const cardEndpointHandler = agentCardHandler({ agentCardProvider: requestHandler });
+    const cardEndpointHandler = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+      if (isLoopbackAgentCardUrl(config.agentCard.url)) {
+        const inferredUrl = inferAgentCardUrlFromRequest(req);
+        if (inferredUrl) {
+          res.json(buildAgentCard({
+            ...config,
+            agentCard: {
+              ...config.agentCard,
+              url: inferredUrl,
+            },
+          }));
+          return;
+        }
+      }
+      agentCardHandler({ agentCardProvider: requestHandler })(req, res, next);
+    };
 
     app.use(cardPath, cardEndpointHandler);
     if (cardPath != "/.well-known/agent.json") {

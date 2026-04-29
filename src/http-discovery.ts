@@ -1,17 +1,12 @@
-import fs from "node:fs";
 import type { IDiscoveryManager, DiscoveredPeer, DnsDiscoveryConfig, DiscoveryLogFn } from "./dns-discovery.js";
-import type { PeerConfig, AgentCardConfig } from "./types.js";
+import type { PeerConfig } from "./types.js";
 import { discoveredPeerToConfig } from "./dns-discovery.js";
 
 /**
  * Extended config for HTTP registry discovery.
- * Adds the self-discovery callback that is only meaningful for the pull-based
- * HTTP registry model — DNS-SD has no equivalent concept.
+ * Kept as a named extension point for HTTP registry-specific options.
  */
-export interface HttpDiscoveryConfig extends DnsDiscoveryConfig {
-  /** Fired when this agent's own entry is found in the registry (matched via /workspace/.a2a WHOAMI). */
-  onSelfDiscovered?: (card: AgentCardConfig) => void;
-}
+export interface HttpDiscoveryConfig extends DnsDiscoveryConfig {}
 
 /**
  * HTTP Registry-based dynamic agent discovery.
@@ -40,39 +35,6 @@ export class HttpDiscoveryManager implements IDiscoveryManager {
       return;
     }
     this.running = true;
-
-    // ----- LOCAL FIRST SELF-DISCOVERY -----
-    if (this.config.onSelfDiscovered) {
-      try {
-        const content = fs.readFileSync("/workspace/.a2a", "utf-8");
-        const kvs: Record<string, string> = {};
-        for (const line of content.split("\n")) {
-          const match = line.match(/^([^=]+)=(.*)$/);
-          if (match) {
-            kvs[match[1].trim()] = match[2].trim();
-          }
-        }
-        
-        if (kvs["WHOAMI"] || kvs["NAME"]) {
-          const name = kvs["NAME"] || "Local Agent";
-          const description = kvs["DESCRIPTION"] || undefined;
-          const skillsRaw = kvs["SKILLS"];
-          const skills = skillsRaw
-            ? skillsRaw.split(",").map(s => s.trim()).filter(Boolean)
-            : [];
-
-          this.config.onSelfDiscovered({
-            name,
-            description,
-            skills,
-          });
-          this.log("info", "http-discovery.self-inject-success", { name, skillsCount: skills.length });
-        }
-      } catch (err) {
-        this.log("warn", "http-discovery.self-inject-failed", { error: String(err) });
-      }
-    }
-    // --------------------------------------
 
     this.log("info", "http-discovery.start", {
       registryUrl: this.config.httpRegistryUrl,
