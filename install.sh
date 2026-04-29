@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_URL="https://github.com/zhoumzh/openclaw-a2a-gateway.git"
+REPO_URL="https://gitlab.chehejia.com/zhoumingzhu/openclaw-a2a-gateway.git"
 INSTALL_DIR="${HOME}/.openclaw/workspace/plugins/a2a-gateway"
 
 echo "==> A2A Gateway (Extended) Installer"
