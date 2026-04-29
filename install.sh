@@ -20,6 +20,7 @@ fi
 mkdir -p "$(dirname "${INSTALL_DIR}")"
 if [ -d "${INSTALL_DIR}/.git" ]; then
   echo "==> Updating existing clone..."
+  git -C "${INSTALL_DIR}" remote set-url origin "${REPO_URL}"
   git -C "${INSTALL_DIR}" pull --ff-only
 else
   echo "==> Cloning repository..."
