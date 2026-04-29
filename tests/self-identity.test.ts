@@ -18,6 +18,7 @@ describe("self identity", () => {
       "description=专职测试、是个高手",
       "skills=slame",
       "host=https://a2a-zhoumingzhu-da71.openclawpages-test.inner.chj.cloud",
+      "token=secret-token",
     ].join("\n"));
 
     assert.ok(identity);
@@ -28,6 +29,7 @@ describe("self identity", () => {
       identity.publicUrl,
       "https://a2a-zhoumingzhu-da71.openclawpages-test.inner.chj.cloud/a2a/jsonrpc",
     );
+    assert.equal(identity.token, "secret-token");
   });
 
   it("normalizes card endpoints and bare hosts to JSON-RPC transport URLs", () => {
@@ -61,6 +63,7 @@ describe("self identity", () => {
       skills: ["slame"],
       hasSkills: true,
       publicUrl: "https://a2a-zhoumingzhu-da71.openclawpages-test.inner.chj.cloud/a2a/jsonrpc",
+      token: "secret-token",
     });
 
     assert.equal(changed, true);
@@ -89,5 +92,34 @@ describe("self identity", () => {
     assert.ok(identity);
     mergeSelfIdentityIntoAgentCard(card, identity);
     assert.deepEqual(card.skills, []);
+  });
+
+  it("initializes bearer security from self identity token", async () => {
+    const { mergeSelfIdentityIntoSecurityConfig } = await import("../src/self-identity.js");
+    const security = {
+      inboundAuth: "none" as const,
+      token: "",
+      tokens: ["old-token"],
+      validTokens: new Set<string>(["old-token"]),
+      allowedMimeTypes: [],
+      maxFileSizeBytes: 0,
+      maxInlineFileSizeBytes: 0,
+      fileUriAllowlist: [],
+    };
+
+    const changed = mergeSelfIdentityIntoSecurityConfig(security, {
+      whoami: "zhoumingzhu-da71",
+      name: "测试专家",
+      hasDescription: false,
+      skills: [],
+      hasSkills: false,
+      token: "secret-token",
+    });
+
+    assert.equal(changed, true);
+    assert.equal(security.inboundAuth, "bearer");
+    assert.equal(security.token, "secret-token");
+    assert.equal(security.validTokens.has("secret-token"), true);
+    assert.equal(security.validTokens.has("old-token"), true);
   });
 });

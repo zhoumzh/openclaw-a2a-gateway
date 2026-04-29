@@ -1,6 +1,6 @@
 import fs from "node:fs";
 
-import type { AgentCardConfig } from "./types.js";
+import type { AgentCardConfig, SecurityConfig } from "./types.js";
 
 export interface SelfIdentity {
   whoami?: string;
@@ -12,6 +12,7 @@ export interface SelfIdentity {
   skills: string[];
   hasSkills: boolean;
   publicUrl?: string;
+  token?: string;
 }
 
 export interface LoadSelfIdentityResult {
@@ -82,6 +83,7 @@ export function parseSelfIdentity(content: string): SelfIdentity | undefined {
   const publicUrl = normalizeAgentTransportUrl(
     getValue(kvs, "agent_card_url", "agentcardurl", "public_url", "publicurl", "base_url", "baseurl", "host", "url"),
   );
+  const token = getValue(kvs, "token", "auth_token", "bearer_token", "a2a_token");
 
   return {
     whoami: whoami || undefined,
@@ -93,6 +95,7 @@ export function parseSelfIdentity(content: string): SelfIdentity | undefined {
     skills: hasSkills && skillsRaw ? skillsRaw.split(",").map((item) => item.trim()).filter(Boolean) : [],
     hasSkills,
     publicUrl,
+    token: token || undefined,
   };
 }
 
@@ -122,4 +125,28 @@ export function mergeSelfIdentityIntoAgentCard(agentCard: AgentCardConfig, ident
     agentCard.skills = next.skills;
   }
   return changed;
+}
+
+export function mergeSelfIdentityIntoSecurityConfig(security: SecurityConfig, identity: SelfIdentity): boolean {
+  if (!identity.token) return false;
+
+  const previous = {
+    inboundAuth: security.inboundAuth,
+    token: security.token || "",
+    tokens: security.tokens || [],
+    validTokens: [...security.validTokens],
+  };
+
+  security.inboundAuth = "bearer";
+  security.token = identity.token;
+  security.tokens = (security.tokens || []).filter((token) => token && token !== identity.token);
+  security.validTokens = new Set([identity.token, ...security.tokens]);
+
+  const next = {
+    inboundAuth: security.inboundAuth,
+    token: security.token || "",
+    tokens: security.tokens || [],
+    validTokens: [...security.validTokens],
+  };
+  return JSON.stringify(previous) !== JSON.stringify(next);
 }

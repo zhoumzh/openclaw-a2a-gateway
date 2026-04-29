@@ -38,7 +38,11 @@ import { QueueingAgentExecutor } from "./src/queueing-executor.js";
 import { runTaskCleanup } from "./src/task-cleanup.js";
 import { recoverStaleTasks } from "./src/task-recovery.js";
 import { FileTaskStore } from "./src/task-store.js";
-import { loadSelfIdentity, mergeSelfIdentityIntoAgentCard } from "./src/self-identity.js";
+import {
+  loadSelfIdentity,
+  mergeSelfIdentityIntoAgentCard,
+  mergeSelfIdentityIntoSecurityConfig,
+} from "./src/self-identity.js";
 import { GatewayTelemetry } from "./src/telemetry.js";
 import { AuditLogger } from "./src/audit.js";
 import { PeerHealthManager } from "./src/peer-health.js";
@@ -372,13 +376,22 @@ const plugin = {
 
     const selfIdentityResult = loadSelfIdentity();
     if (selfIdentityResult.identity) {
-      const changed = mergeSelfIdentityIntoAgentCard(config.agentCard, selfIdentityResult.identity);
+      const cardChanged = mergeSelfIdentityIntoAgentCard(config.agentCard, selfIdentityResult.identity);
+      const securityChanged = mergeSelfIdentityIntoSecurityConfig(config.security, selfIdentityResult.identity);
       config.advertise.instanceName = sanitizeInstanceName(config.agentCard.name);
       config.advertise.txt.name = config.agentCard.name;
+      if (config.security.inboundAuth === "bearer" && config.security.token) {
+        config.advertise.txt.auth_type = "bearer";
+        config.advertise.txt.auth_token = config.security.token;
+      } else {
+        delete config.advertise.txt.auth_type;
+        delete config.advertise.txt.auth_token;
+      }
       api.logger.info(
         `a2a-gateway: Self identity loaded from ${selfIdentityResult.path}; ` +
         `name="${config.agentCard.name}", hasUrl=${String(Boolean(config.agentCard.url))}, ` +
-        `skills=${config.agentCard.skills.length}, changed=${String(changed)}`
+        `skills=${config.agentCard.skills.length}, hasToken=${String(Boolean(selfIdentityResult.identity.token))}, ` +
+        `cardChanged=${String(cardChanged)}, securityChanged=${String(securityChanged)}`
       );
     } else if (selfIdentityResult.error) {
       api.logger.info(`a2a-gateway: Self identity not loaded from ${selfIdentityResult.path}: ${selfIdentityResult.error}`);
