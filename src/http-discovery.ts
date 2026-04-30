@@ -52,25 +52,7 @@ export function unwrapHttpRegistryPayload(rawData: unknown): unknown[] {
   if (Array.isArray(rawData)) {
     return rawData;
   }
-
-  if (rawData && typeof rawData === "object") {
-    const record = rawData as Record<string, unknown>;
-    if (record.data && typeof record.data === "object") {
-      const data = record.data as Record<string, unknown>;
-      if (Array.isArray(data.dependencies)) {
-        return data.dependencies;
-      }
-      if (Array.isArray(data.items)) {
-        return data.items;
-      }
-    }
-
-    if (Array.isArray(record.items)) {
-      return record.items;
-    }
-  }
-
-  throw new Error("Invalid registry response: expected JSON array or { data: { dependencies/items: [] } } envelope");
+  throw new Error("Invalid registry response: expected JSON array");
 }
 
 export function resolveDiscoveredAgentCardUrl(item: Record<string, unknown>): string {
