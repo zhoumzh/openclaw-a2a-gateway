@@ -53,6 +53,9 @@ To focus on one peer:
 
 ## Interpretation rules
 
+- When the user asks which A2A participants/peers are visible or available, answer strictly from `a2a_helper(action=inspect_peers)` and use `effectivePeers` as the final list.
+- Do not infer, merge, or append agents from registry `/agents` endpoints, host memory, prior conversation context, self identity, or any other agent catalog. In this plugin, visibility is limited to discovery results plus static peers after merge rules.
+- Do not list the current instance itself unless it already appears inside `effectivePeers`.
 - If `discoveredPeers` contains a peer and `effectivePeers` contains it with `source=discovered`, HTTP discovery is active and that peer is usable at runtime.
 - If a peer appears in `collisions`, static config wins for that name.
 - If `mergeWithStatic` is `false`, `effectivePeers` should be discovery-only.

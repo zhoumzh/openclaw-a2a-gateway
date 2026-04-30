@@ -199,6 +199,7 @@ function formatPeerLine(peer: PeerConfigView | EffectivePeerView): string {
 export function formatPeerInspectionText(snapshot: PeerInspectionSnapshot, peerName?: string): string {
   const lines = [
     `Discovery: enabled=${snapshot.discovery.enabled} type=${snapshot.discovery.type} mergeWithStatic=${snapshot.discovery.mergeWithStatic} refreshIntervalMs=${snapshot.discovery.refreshIntervalMs}`,
+    "Visibility scope: only runtime effective peers from static peers plus discovery results are included; never infer or append agents from registry /agents listings, host memory, or self identity unless they are already effective peers.",
   ];
 
   if (snapshot.discovery.selfIdentity) {

@@ -117,6 +117,10 @@ describe("formatPeerInspectionText", () => {
 
     const text = formatPeerInspectionText(snapshot);
 
+    assert.match(
+      text,
+      /Visibility scope: only runtime effective peers from static peers plus discovery results are included; never infer or append agents from registry \/agents listings, host memory, or self identity unless they are already effective peers\./,
+    );
     assert.match(text, /Counts: static=1 discovered=2 effective=2 collisions=1/);
     assert.match(text, /Resolved registry URL: https:\/\/registry\.example\.com\/agents\/bot-1\/discovery/);
     assert.match(text, /auth=bearer\(stat\.\.\.oken\)/);

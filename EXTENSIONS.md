@@ -81,7 +81,7 @@ curl -s http://localhost:18800/.well-known/agent.json | python3 -m json.tool
 
 ### 典型调用
 
-查看当前可用参与者：
+查看当前 `a2a-gateway` 可路由的 peers：
 
 ```json
 {
@@ -92,6 +92,13 @@ curl -s http://localhost:18800/.well-known/agent.json | python3 -m json.tool
   }
 }
 ```
+
+这里的“可见 / 可用参与者”有严格边界：
+
+- 只能来自 `a2a_helper(action=inspect_peers)` 返回的 `effectivePeers`
+- `effectivePeers = static peers + discovery peers`（按 `mergeWithStatic` 合并）
+- 不能把注册中心 `/agents` 端点里的 agent 列表混进来
+- 不能把宿主记忆、历史上下文、当前实例自己的身份自动补进来，除非它本身就在 `effectivePeers` 里
 
 向某个参与者发文本消息：
 

@@ -827,6 +827,73 @@ describe("a2a-gateway plugin", () => {
     }
   });
 
+  it("a2a_send_message uses peer bearer token for downstream requests", async () => {
+    const seenAuthHeaders: string[] = [];
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const headers = new Headers(init?.headers);
+      const authHeader = headers.get("authorization");
+      if (authHeader) {
+        seenAuthHeaders.push(authHeader);
+      }
+
+      if (url === "http://mock-peer/.well-known/agent-card.json" || url === "http://mock-peer/.well-known/agent.json") {
+        return new Response(
+          JSON.stringify({
+            protocolVersion: "0.3.0",
+            name: "Peer Agent",
+            url: "http://mock-peer/a2a/jsonrpc",
+            skills: [],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      }
+
+      if (url === "http://mock-peer/a2a/jsonrpc") {
+        const bodyText = String(init?.body || "{}");
+        const payload = JSON.parse(bodyText) as Record<string, unknown>;
+
+        return new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: payload.id,
+            result: { accepted: true },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      }
+
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+
+    try {
+      const { tools } = registerPlugin(makeConfig({
+        peers: [
+          {
+            name: "peer-1",
+            agentCardUrl: "http://mock-peer/.well-known/agent-card.json",
+            auth: { type: "bearer", token: "peer-secret-token" },
+          },
+        ],
+      }));
+
+      const sendMessageTool = tools.get("a2a_send_message");
+      assert.ok(sendMessageTool, "a2a_send_message tool should be registered");
+
+      const result = await sendMessageTool.execute("call-1", {
+        peer: "peer-1",
+        message: "ping",
+      });
+
+      assert.ok(result.details.ok, "tool call should succeed");
+      assert.ok(seenAuthHeaders.includes("Bearer peer-secret-token"));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("a2a_send_file tool forwards agentId to peer", async () => {
     const received: Array<Record<string, unknown>> = [];
 

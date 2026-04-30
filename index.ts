@@ -353,6 +353,30 @@ function inferAgentCardUrlFromRequest(req: express.Request): string {
   return `${proto}://${host}/a2a/jsonrpc`;
 }
 
+function maskLogToken(token: string | undefined): string | undefined {
+  if (!token) return undefined;
+  const value = token.trim();
+  if (!value) return undefined;
+  if (value.length <= 8) return `${value[0]}...${value[value.length - 1]}`;
+  return `${value.slice(0, 4)}...${value.slice(-4)}`;
+}
+
+function buildMessagePreview(message: Record<string, unknown>): string {
+  const parts = Array.isArray(message.parts) ? message.parts : [];
+  const textPart = parts.find((part) => part && typeof part === "object" && (part as Record<string, unknown>).kind === "text");
+  const textFromParts = textPart && typeof (textPart as Record<string, unknown>).text === "string"
+    ? String((textPart as Record<string, unknown>).text)
+    : "";
+  const directText = typeof message.text === "string"
+    ? message.text
+    : typeof message.message === "string"
+      ? message.message
+      : "";
+  const value = (textFromParts || directText).trim();
+  if (!value) return "(empty)";
+  return value.length > 120 ? `${value.slice(0, 117)}...` : value;
+}
+
 const plugin = {
   id: "a2a-gateway",
   name: "A2A Gateway",
@@ -626,6 +650,11 @@ const plugin = {
 
       const peer = findPeer(peerName);
       if (!peer) {
+        api.logger.warn(`a2a-gateway: outbound send aborted because peer was not found: ${JSON.stringify({
+          requestedPeer: peerName || undefined,
+          availablePeers: getEffectivePeers().map((p) => p.name),
+          messagePreview: buildMessagePreview(message),
+        })}`);
         return {
           ok: false,
           data: {
@@ -637,6 +666,15 @@ const plugin = {
       }
 
       const startedAt = Date.now();
+      const outboundLogContext = {
+        peer: peer.name,
+        agentCardUrl: peer.agentCardUrl,
+        authType: peer.auth?.type || "none",
+        authTokenPreview: maskLogToken(peer.auth?.token),
+        targetAgentId: typeof message.agentId === "string" ? message.agentId : undefined,
+        messagePreview: buildMessagePreview(message),
+      };
+      api.logger.info(`a2a-gateway: outbound send start: ${JSON.stringify(outboundLogContext)}`);
       const sendOptions = {
         healthManager: healthManager ?? undefined,
         retryConfig: config.resilience.retry,
@@ -655,6 +693,11 @@ const plugin = {
         auditLogger.recordOutbound(peer.name, result.ok, result.statusCode, outDuration);
 
         if (result.ok) {
+          api.logger.info(`a2a-gateway: outbound send succeeded: ${JSON.stringify({
+            ...outboundLogContext,
+            durationMs: outDuration,
+            statusCode: result.statusCode,
+          })}`);
           return {
             ok: true,
             data: {
@@ -665,6 +708,12 @@ const plugin = {
           };
         }
 
+        api.logger.warn(`a2a-gateway: outbound send failed: ${JSON.stringify({
+          ...outboundLogContext,
+          durationMs: outDuration,
+          statusCode: result.statusCode,
+          response: result.response,
+        })}`);
         return {
           ok: false,
           data: {
@@ -677,6 +726,11 @@ const plugin = {
         const errDuration = Date.now() - startedAt;
         telemetry.recordOutboundRequest(peer.name, false, 500, errDuration);
         auditLogger.recordOutbound(peer.name, false, 500, errDuration);
+        api.logger.error(`a2a-gateway: outbound send threw: ${JSON.stringify({
+          ...outboundLogContext,
+          durationMs: errDuration,
+          error: String((error as Error)?.message || error),
+        })}`);
         return {
           ok: false,
           data: {
@@ -962,7 +1016,7 @@ const plugin = {
     if (api.registerTool) {
       api.registerTool({
         name: "a2a_helper",
-        description: "General helper for the A2A Gateway plugin. Use it to inspect runtime peers and other A2A gateway state.",
+        description: "General helper for the A2A Gateway plugin. Use it to inspect runtime peers and other A2A gateway state. Peer visibility is strictly limited to effective peers derived from static peers plus discovery results.",
         label: "A2A Helper",
         parameters: {
           type: "object" as const,
