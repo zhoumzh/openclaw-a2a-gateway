@@ -63,6 +63,20 @@ To focus on one peer:
 - If `mergeWithStatic` is `false`, `effectivePeers` should be discovery-only.
 - If `resolvedRegistryUrl` is empty in HTTP mode, inspect `/workspace/.a2a` and `WHOAMI`.
 
+## Output format
+
+Present the tool result as follows. Do NOT invent field names or reformat the snapshot into custom structures like `count`/`entries`.
+
+**When peers exist** — list each entry in `effectivePeers` with `name`, `source` (static/discovered), and `agentCardUrl`. Also show `summary` counts.
+
+**When `effectivePeers` is empty** — report it directly using the counts from `summary` (e.g. `static=0 discovered=0 effective=0`). Then explain the cause based on the discovery settings in the snapshot:
+
+- If `discovery.enabled=false` and `summary.staticPeers=0`: no static peers configured and discovery is off. Suggest the user add peers under the `peers` config key.
+- If `discovery.enabled=false` and `summary.staticPeers>0`: static peers are configured but they did not appear in `effectivePeers`; show the static peer list and note the discrepancy.
+- If `discovery.enabled=true` and `summary.discoveredPeers=0`: discovery is on but found nothing. Show `discovery.type`, `resolvedRegistryUrl` (if HTTP), and suggest the user verify the registry or DNS-SD setup.
+
+Do not offer open-ended diagnostic choices or numbered follow-up menus. Instead state the diagnosis directly from the snapshot data and give one concrete next step.
+
 ## Positioning
 
 - Prefer this skill over the legacy `a2a-setup` skill when the task is not installation.
