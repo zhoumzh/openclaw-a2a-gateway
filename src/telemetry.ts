@@ -7,6 +7,8 @@ type TerminalTaskState = "completed" | "failed" | "canceled" | "rejected";
 
 /** Callback to get peer states without importing PeerHealthManager directly. */
 export type PeerStateProvider = () => Map<string, PeerState>;
+/** Callback to get runtime-visible peer names (effective peers). */
+export type PeerVisibilityProvider = () => string[];
 
 /** Callback for audit logging on task completion. */
 export type TaskAuditCallback = (taskId: string, contextId: string, state: string, durationMs: number) => void;
@@ -93,6 +95,7 @@ export class GatewayTelemetry {
 
   private readonly peerRetries: Record<string, number> = {};
   private peerStateProvider: PeerStateProvider | null = null;
+  private peerVisibilityProvider: PeerVisibilityProvider | null = null;
   private taskAuditCallback: TaskAuditCallback | null = null;
 
   constructor(logger: LoggerLike, options: GatewayTelemetryOptions = {}) {
@@ -103,6 +106,11 @@ export class GatewayTelemetry {
   /** Register a callback to retrieve peer health states for the metrics snapshot. */
   setPeerStateProvider(provider: PeerStateProvider): void {
     this.peerStateProvider = provider;
+  }
+
+  /** Register a callback to retrieve runtime-visible peer names for metrics. */
+  setPeerVisibilityProvider(provider: PeerVisibilityProvider): void {
+    this.peerVisibilityProvider = provider;
   }
 
   /** Register a callback for audit logging on task completion. */
@@ -287,6 +295,19 @@ export class GatewayTelemetry {
             ? new Date(state.lastCheckAt).toISOString()
             : undefined,
         };
+      }
+    }
+
+    if (this.peerVisibilityProvider) {
+      for (const name of this.peerVisibilityProvider()) {
+        if (!peers[name]) {
+          peers[name] = {
+            health: "unknown",
+            circuit: "closed",
+            consecutive_failures: 0,
+            total_retries: this.peerRetries[name] || 0,
+          };
+        }
       }
     }
 

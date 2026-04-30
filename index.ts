@@ -541,6 +541,7 @@ const plugin = {
     if (healthManager) {
       telemetry.setPeerStateProvider(() => healthManager.getAllStates());
     }
+    telemetry.setPeerVisibilityProvider(() => getEffectivePeers().map((peer) => peer.name));
 
     const inspectPeersParams = {
       type: "object" as const,

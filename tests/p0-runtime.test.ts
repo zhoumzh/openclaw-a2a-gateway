@@ -158,4 +158,15 @@ describe("P0 runtime components", () => {
     assert.equal(snapshot.tasks.rejected, 1);
     assert.equal(snapshot.tasks.queued, 1);
   });
+
+  it("GatewayTelemetry exposes runtime-visible peers even without health state", () => {
+    const telemetry = new GatewayTelemetry(silentLogger(), { structuredLogs: false });
+    telemetry.setPeerVisibilityProvider(() => ["a2a-zhoumingzhu-ee58", "a2a-zhoumingzhu-5b29"]);
+
+    const snapshot = telemetry.snapshot();
+
+    assert.deepEqual(Object.keys(snapshot.peers).sort(), ["a2a-zhoumingzhu-5b29", "a2a-zhoumingzhu-ee58"]);
+    assert.equal(snapshot.peers["a2a-zhoumingzhu-ee58"].health, "unknown");
+    assert.equal(snapshot.peers["a2a-zhoumingzhu-ee58"].circuit, "closed");
+  });
 });
