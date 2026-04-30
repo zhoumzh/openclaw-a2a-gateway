@@ -70,6 +70,10 @@ import {
   parseQuorumConfig,
 } from "./src/quorum-discovery.js";
 import {
+  buildPeerInspectionSnapshot,
+  formatPeerInspectionText,
+} from "./src/peer-inspector.js";
+import {
   computeSaturationDelay,
   parseSaturationConfig,
   type SaturationConfig,
@@ -514,6 +518,175 @@ const plugin = {
       telemetry.setPeerStateProvider(() => healthManager.getAllStates());
     }
 
+    const inspectPeersParams = {
+      type: "object" as const,
+      additionalProperties: false,
+      properties: {
+        refreshDiscovery: {
+          type: "boolean" as const,
+          description: "Trigger a discovery refresh before reading the runtime peer set.",
+        },
+        peer: {
+          type: "string" as const,
+          description: "Optional peer name filter.",
+        },
+      },
+    };
+
+    const buildPeerInspection = () => buildPeerInspectionSnapshot({
+      discovery: config.discovery,
+      staticPeers: config.peers,
+      discoveredPeers: discoveryManager?.getDiscoveredPeers() ?? [],
+      selfIdentityResult: loadSelfIdentity(),
+    });
+
+    const filterPeerInspectionSnapshot = (
+      snapshot: ReturnType<typeof buildPeerInspection>,
+      peerName: string,
+    ) => {
+      if (!peerName) return snapshot;
+      return {
+        ...snapshot,
+        staticPeers: snapshot.staticPeers.filter((peer) => peer.name === peerName),
+        discoveredPeers: snapshot.discoveredPeers.filter((peer) => peer.name === peerName),
+        effectivePeers: snapshot.effectivePeers.filter((peer) => peer.name === peerName),
+        collisions: snapshot.collisions.filter((peer) => peer.name === peerName),
+        summary: {
+          staticPeers: snapshot.staticPeers.filter((peer) => peer.name === peerName).length,
+          discoveredPeers: snapshot.discoveredPeers.filter((peer) => peer.name === peerName).length,
+          effectivePeers: snapshot.effectivePeers.filter((peer) => peer.name === peerName).length,
+          collisions: snapshot.collisions.filter((peer) => peer.name === peerName).length,
+        },
+      };
+    };
+
+    const inspectPeers = async (params: Record<string, unknown>) => {
+      const refreshRequested = Boolean(params.refreshDiscovery);
+      const peerName = typeof params.peer === "string" ? params.peer.trim() : "";
+
+      if (refreshRequested) {
+        if (discoveryManager && config.discovery.enabled) {
+          await discoveryManager.triggerRefresh();
+        } else {
+          api.logger.info("a2a-gateway: a2a_helper inspect_peers refresh skipped because discovery is disabled");
+        }
+      }
+
+      const snapshot = filterPeerInspectionSnapshot(buildPeerInspection(), peerName);
+      return {
+        ok: true,
+        content: [{ type: "text" as const, text: formatPeerInspectionText(snapshot, peerName || undefined) }],
+        details: {
+          ok: true,
+          action: "inspect_peers",
+          refreshed: refreshRequested && Boolean(discoveryManager && config.discovery.enabled),
+          snapshot,
+        },
+      };
+    };
+
+    const sendToPeer = async (payload: Record<string, unknown>) => {
+      let peerName = asString(payload.peer || payload.name, "");
+      const message = asObject(payload.message || payload.payload);
+
+      if (!peerName && config.routing.rules.length > 0) {
+        const msgText = typeof message.text === "string" ? message.text
+          : typeof message.message === "string" ? message.message : "";
+        const msgTags = Array.isArray(message.tags)
+          ? (message.tags as unknown[]).filter((t): t is string => typeof t === "string")
+          : [];
+        const peerSkills = healthManager?.getPeerSkills();
+        if (config.routing.affinity) {
+          const scored = matchAllRules(
+            config.routing.rules,
+            { text: msgText, tags: msgTags },
+            peerSkills,
+            undefined,
+            config.routing.affinity,
+          );
+          if (scored.length > 0) {
+            const best = scored[0];
+            peerName = best.peer;
+            if (best.agentId && !message.agentId) {
+              message.agentId = best.agentId;
+            }
+            api.logger.info(`a2a-gateway: affinity routing → peer="${peerName}" score=${best.score.toFixed(3)}${best.agentId ? ` agentId="${best.agentId}"` : ""}`);
+          }
+        } else {
+          const routeMatch = matchRule(config.routing.rules, { text: msgText, tags: msgTags }, peerSkills);
+          if (routeMatch) {
+            peerName = routeMatch.peer;
+            if (routeMatch.agentId && !message.agentId) {
+              message.agentId = routeMatch.agentId;
+            }
+            api.logger.info(`a2a-gateway: rule-based routing matched → peer="${peerName}"${routeMatch.agentId ? ` agentId="${routeMatch.agentId}"` : ""}`);
+          }
+        }
+      }
+
+      const peer = findPeer(peerName);
+      if (!peer) {
+        return {
+          ok: false,
+          data: {
+            error: peerName
+              ? `Peer not found: ${peerName}`
+              : "No peer specified and no routing rule matched",
+          },
+        };
+      }
+
+      const startedAt = Date.now();
+      const sendOptions = {
+        healthManager: healthManager ?? undefined,
+        retryConfig: config.resilience.retry,
+        log: (level: "info" | "warn", msg: string, details?: Record<string, unknown>) => {
+          if (details?.attempt) {
+            telemetry.recordPeerRetry(peer.name, details.attempt as number);
+          }
+          api.logger[level](details ? `${msg}: ${JSON.stringify(details)}` : msg);
+        },
+      };
+
+      try {
+        const result = await client.sendMessage(peer, message, sendOptions);
+        const outDuration = Date.now() - startedAt;
+        telemetry.recordOutboundRequest(peer.name, result.ok, result.statusCode, outDuration);
+        auditLogger.recordOutbound(peer.name, result.ok, result.statusCode, outDuration);
+
+        if (result.ok) {
+          return {
+            ok: true,
+            data: {
+              peer: peer.name,
+              statusCode: result.statusCode,
+              response: result.response,
+            },
+          };
+        }
+
+        return {
+          ok: false,
+          data: {
+            peer: peer.name,
+            statusCode: result.statusCode,
+            response: result.response,
+          },
+        };
+      } catch (error) {
+        const errDuration = Date.now() - startedAt;
+        telemetry.recordOutboundRequest(peer.name, false, 500, errDuration);
+        auditLogger.recordOutbound(peer.name, false, 500, errDuration);
+        return {
+          ok: false,
+          data: {
+            peer: peer.name,
+            error: String((error as Error)?.message || error),
+          },
+        };
+      }
+    };
+
     // Wire audit logger + push notifications for inbound task completion
     telemetry.setTaskAuditCallback((taskId, contextId, state, durationMs) => {
       auditLogger.recordInbound(taskId, contextId, state, durationMs);
@@ -777,93 +950,9 @@ const plugin = {
     });
 
     api.registerGatewayMethod("a2a.send", ({ params, respond }) => {
-      const payload = asObject(params);
-      let peerName = asString(payload.peer || payload.name, "");
-      const message = asObject(payload.message || payload.payload);
-
-      // Rule-based routing: auto-select peer when not explicitly provided
-      if (!peerName && config.routing.rules.length > 0) {
-        const msgText = typeof message.text === "string" ? message.text
-          : typeof message.message === "string" ? message.message : "";
-        const msgTags = Array.isArray(message.tags)
-          ? (message.tags as unknown[]).filter((t): t is string => typeof t === "string")
-          : [];
-        const peerSkills = healthManager?.getPeerSkills();
-        // Bio-inspired routing: when affinity config is present, use Hill equation
-        // scored matching (best match). Otherwise fall back to legacy first-match.
-        if (config.routing.affinity) {
-          const scored = matchAllRules(
-            config.routing.rules,
-            { text: msgText, tags: msgTags },
-            peerSkills,
-            undefined,
-            config.routing.affinity,
-          );
-          if (scored.length > 0) {
-            const best = scored[0];
-            peerName = best.peer;
-            if (best.agentId && !message.agentId) {
-              message.agentId = best.agentId;
-            }
-            api.logger.info(`a2a-gateway: affinity routing → peer="${peerName}" score=${best.score.toFixed(3)}${best.agentId ? ` agentId="${best.agentId}"` : ""}`);
-          }
-        } else {
-          const routeMatch = matchRule(config.routing.rules, { text: msgText, tags: msgTags }, peerSkills);
-          if (routeMatch) {
-            peerName = routeMatch.peer;
-            if (routeMatch.agentId && !message.agentId) {
-              message.agentId = routeMatch.agentId;
-            }
-            api.logger.info(`a2a-gateway: rule-based routing matched → peer="${peerName}"${routeMatch.agentId ? ` agentId="${routeMatch.agentId}"` : ""}`);
-          }
-        }
-      }
-
-      const peer = findPeer(peerName);
-      if (!peer) {
-        const hint = peerName
-          ? `Peer not found: ${peerName}`
-          : "No peer specified and no routing rule matched";
-        respond(false, { error: hint });
-        return;
-      }
-
-      const startedAt = Date.now();
-      const sendOptions = {
-        healthManager: healthManager ?? undefined,
-        retryConfig: config.resilience.retry,
-        log: (level: "info" | "warn", msg: string, details?: Record<string, unknown>) => {
-          if (details?.attempt) {
-            telemetry.recordPeerRetry(peer.name, details.attempt as number);
-          }
-          api.logger[level](details ? `${msg}: ${JSON.stringify(details)}` : msg);
-        },
-      };
-      client
-        .sendMessage(peer, message, sendOptions)
-        .then((result) => {
-          const outDuration = Date.now() - startedAt;
-          telemetry.recordOutboundRequest(peer.name, result.ok, result.statusCode, outDuration);
-          auditLogger.recordOutbound(peer.name, result.ok, result.statusCode, outDuration);
-          if (result.ok) {
-            respond(true, {
-              statusCode: result.statusCode,
-              response: result.response,
-            });
-            return;
-          }
-
-          respond(false, {
-            statusCode: result.statusCode,
-            response: result.response,
-          });
-        })
-        .catch((error) => {
-          const errDuration = Date.now() - startedAt;
-          telemetry.recordOutboundRequest(peer.name, false, 500, errDuration);
-          auditLogger.recordOutbound(peer.name, false, 500, errDuration);
-          respond(false, { error: String(error?.message || error) });
-        });
+      sendToPeer(asObject(params))
+        .then((result) => respond(result.ok, result.data))
+        .catch((error) => respond(false, { error: String((error as Error)?.message || error) }));
     });
 
     // ------------------------------------------------------------------
@@ -871,6 +960,104 @@ const plugin = {
     // Lets the agent send a file (by URI) to a peer via A2A FilePart.
     // ------------------------------------------------------------------
     if (api.registerTool) {
+      api.registerTool({
+        name: "a2a_helper",
+        description: "General helper for the A2A Gateway plugin. Use it to inspect runtime peers and other A2A gateway state.",
+        label: "A2A Helper",
+        parameters: {
+          type: "object" as const,
+          additionalProperties: false,
+          required: ["action"],
+          properties: {
+            action: {
+              type: "string" as const,
+              enum: ["inspect_peers"],
+              description: "Helper action to perform.",
+            },
+            refreshDiscovery: {
+              type: "boolean" as const,
+              description: "Trigger a discovery refresh before reading the runtime peer set.",
+            },
+            peer: {
+              type: "string" as const,
+              description: "Optional peer name filter for inspect_peers.",
+            },
+          },
+        },
+        async execute(toolCallId, params) {
+          if (params.action === "inspect_peers") {
+            return inspectPeers(params);
+          }
+
+          return {
+            content: [{ type: "text" as const, text: `Unsupported a2a_helper action: ${String(params.action || "")}` }],
+            details: { ok: false },
+          };
+        },
+      });
+
+      api.registerTool({
+        name: "a2a_send_message",
+        description: "Send a text message to an A2A peer and return the peer response.",
+        label: "A2A Send Message",
+        parameters: {
+          type: "object" as const,
+          additionalProperties: false,
+          required: ["peer", "message"],
+          properties: {
+            peer: {
+              type: "string" as const,
+              description: "Name of the target peer.",
+            },
+            message: {
+              type: "string" as const,
+              description: "Text message to send to the peer.",
+            },
+            agentId: {
+              type: "string" as const,
+              description: "Optional peer-side OpenClaw agentId override.",
+            },
+            tags: {
+              type: "array" as const,
+              items: { type: "string" as const },
+              description: "Optional tags used by peer-side logic or routing.",
+            },
+          },
+        },
+        async execute(_toolCallId, params) {
+          const result = await sendToPeer({
+            peer: params.peer,
+            message: {
+              text: params.message,
+              ...(params.agentId ? { agentId: params.agentId } : {}),
+              ...(Array.isArray(params.tags) ? { tags: params.tags } : {}),
+            },
+          });
+
+          if (result.ok) {
+            return {
+              content: [{
+                type: "text" as const,
+                text: `Message sent to ${String((result.data as Record<string, unknown>).peer)}.\nResponse: ${JSON.stringify((result.data as Record<string, unknown>).response)}`,
+              }],
+              details: { ok: true, ...(result.data as Record<string, unknown>) },
+            };
+          }
+
+          const data = result.data as Record<string, unknown>;
+          const errorText = typeof data.error === "string"
+            ? data.error
+            : JSON.stringify(data.response ?? data);
+          return {
+            content: [{
+              type: "text" as const,
+              text: `Failed to send message to ${String(params.peer)}: ${errorText}`,
+            }],
+            details: { ok: false, ...data },
+          };
+        },
+      });
+
       const sendFileParams = {
         type: "object" as const,
         required: ["peer", "uri"],

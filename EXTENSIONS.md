@@ -9,12 +9,13 @@
 ## 目录
 
 1. [安装](#1-安装)
-2. [HTTP 注册中心发现](#2-http-注册中心发现)
-3. [灵魂注入：AgentCard 动态热重载](#3-灵魂注入agentcard-动态热重载)
-4. [入站鉴权 Fail-Closed 加固](#4-入站鉴权-fail-closed-加固)
-5. [沙箱环境兼容性修复](#5-沙箱环境兼容性修复)
-6. [注册中心 JSON 格式规范](#6-注册中心-json-格式规范)
-7. [故障排查](#7-故障排查)
+2. [插件内 Assistant 能力](#2-插件内-assistant-能力)
+3. [HTTP 注册中心发现](#3-http-注册中心发现)
+4. [灵魂注入：AgentCard 动态热重载](#4-灵魂注入agentcard-动态热重载)
+5. [入站鉴权 Fail-Closed 加固](#5-入站鉴权-fail-closed-加固)
+6. [沙箱环境兼容性修复](#6-沙箱环境兼容性修复)
+7. [注册中心 JSON 格式规范](#7-注册中心-json-格式规范)
+8. [故障排查](#8-故障排查)
 
 ---
 
@@ -40,11 +41,19 @@ REGISTRY_URL="https://your-registry.example.com" \
 | 1 | 检查 `openclaw` CLI 是否可用（不可用则退出） |
 | 2 | Clone 仓库到 `~/.openclaw/workspace/plugins/a2a-gateway`；已存在时执行 `git pull` |
 | 3 | `npm install --production` |
-| 4 | `openclaw plugins install` 注册插件 |
+| 4 | `openclaw plugins install` 注册插件，并加载 `openclaw.plugin.json` 中声明的 `skills` 目录 |
 | 5 | 若传入 `REGISTRY_URL` 则自动写入发现配置 |
 | 6 | `openclaw gateway restart` |
 
 脚本幂等，可重复执行。
+
+### 安装结果
+
+扩展版插件安装完成后，会随插件一起提供插件内 assistant skill，不再要求手工把旧的 `skill/` 目录复制到全局 skills 目录。
+
+当前插件内 assistant 入口位于：
+
+- `skills/a2a-helper/SKILL.md`
 
 ### 安装后验证
 
@@ -55,7 +64,63 @@ curl -s http://localhost:18800/.well-known/agent.json | python3 -m json.tool
 
 ---
 
-## 2. HTTP 注册中心发现
+## 2. 插件内 Assistant 能力
+
+### 定位
+
+本扩展版不再假设使用者必须手工修改 `TOOLS.md` 来教模型如何调用 A2A。插件会直接向 agent 暴露三个工具：
+
+- `a2a_helper`：运行态助手入口，负责查看当前 peers / discovery 状态
+- `a2a_send_message`：向指定 peer 发送文本消息
+- `a2a_send_file`：向指定 peer 发送文件
+
+其中：
+
+- `a2a.send` 仍然保留为 gateway method，供宿主系统、程序编排和测试使用
+- agent 面向自然语言调用时，应优先使用上面的三个 tools
+
+### 典型调用
+
+查看当前可用参与者：
+
+```json
+{
+  "tool": "a2a_helper",
+  "arguments": {
+    "action": "inspect_peers",
+    "refreshDiscovery": true
+  }
+}
+```
+
+向某个参与者发文本消息：
+
+```json
+{
+  "tool": "a2a_send_message",
+  "arguments": {
+    "peer": "a2a-zhoumingzhu-ee58",
+    "message": "你好，请汇报当前状态"
+  }
+}
+```
+
+向某个参与者发送文件：
+
+```json
+{
+  "tool": "a2a_send_file",
+  "arguments": {
+    "peer": "a2a-zhoumingzhu-ee58",
+    "uri": "https://example.com/report.pdf",
+    "name": "report.pdf"
+  }
+}
+```
+
+---
+
+## 3. HTTP 注册中心发现
 
 ### 背景
 
@@ -113,12 +178,12 @@ GET httpRegistryUrl + "/agents/{WHOAMI}/discovery"  →  JSON 数组
     ↓
 更新内存中的 discoveredPeers 列表
     ↓
-（同时检查 WHOAMI 匹配 → 触发灵魂注入，见第 2 节）
+（同时检查 WHOAMI 匹配 → 触发灵魂注入，见第 4 节）
 ```
 
 ---
 
-## 3. 灵魂注入：AgentCard 动态热重载
+## 4. 灵魂注入：AgentCard 动态热重载
 
 ### 背景
 
@@ -126,7 +191,7 @@ GET httpRegistryUrl + "/agents/{WHOAMI}/discovery"  →  JSON 数组
 
 ### 前置条件
 
-HTTP 发现模式必须已启用（见第 1 节）。
+HTTP 发现模式必须已启用（见第 3 节）。
 
 ### 步骤一：写入身份标识文件
 
@@ -193,7 +258,7 @@ cat ~/.openclaw/agent-card-state.json
 
 ---
 
-## 4. 入站鉴权 Fail-Closed 加固
+## 5. 入站鉴权 Fail-Closed 加固
 
 ### 问题
 
@@ -223,7 +288,7 @@ openclaw config set plugins.entries.a2a-gateway.config.security.token '"your-str
 
 ---
 
-## 5. 沙箱环境兼容性修复
+## 6. 沙箱环境兼容性修复
 
 ### 5.1 Gateway Token 多路径回退
 
@@ -260,7 +325,7 @@ cat ~/.openclaw/identity/device.json | jq 'keys'
 
 ---
 
-## 6. 注册中心 JSON 格式规范
+## 7. 注册中心 JSON 格式规范
 
 HTTP 注册中心端点需返回一个 JSON 数组，每个元素格式如下：
 
@@ -328,7 +393,7 @@ interface RegistryEntry {
 
 ---
 
-## 7. 故障排查
+## 8. 故障排查
 
 ### 灵魂注入未触发
 
