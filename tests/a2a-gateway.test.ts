@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import dns from "node:dns";
+import fs from "node:fs";
 import { describe, it, mock } from "node:test";
 
 import plugin from "../index.js";
@@ -822,6 +823,55 @@ describe("a2a-gateway plugin", () => {
       const msg = (params as any)?.message as Record<string, unknown>;
       assert.equal(msg.agentId, "peer-agent");
       assert.deepEqual(msg.parts, [{ kind: "text", text: "ping" }]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("a2a_helper refreshes discovery by default before listing peers", async () => {
+    const originalFetch = globalThis.fetch;
+    mock.method(fs, "readFileSync", () => "WHOAMI=bot-1\n");
+
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      assert.equal(String(input), "https://registry.example.com/agents/bot-1/discovery");
+      return new Response(
+        JSON.stringify([
+          {
+            id: "peer-1",
+            name: "a2a-zhoumingzhu-5b29",
+            agentCardUrl: "https://peer.example.com/.well-known/agent-card.json",
+            auth: { type: "bearer", token: "secret-token" },
+          },
+        ]),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }) as typeof fetch;
+
+    try {
+      const { tools } = registerPlugin(makeConfig({
+        discovery: {
+          enabled: true,
+          type: "http",
+          serviceName: "_a2a._tcp.local",
+          httpRegistryUrl: "https://registry.example.com",
+          refreshIntervalMs: 30_000,
+          mergeWithStatic: true,
+        },
+        peers: [],
+      }));
+
+      const helperTool = tools.get("a2a_helper");
+      assert.ok(helperTool, "a2a_helper tool should be registered");
+
+      const result = await helperTool.execute("call-1", {
+        action: "inspect_peers",
+      });
+
+      assert.ok(result.details.ok, "tool call should succeed");
+      assert.equal(result.details.refreshed, true);
+      assert.equal(result.details.snapshot.summary.discoveredPeers, 1);
+      assert.equal(result.details.snapshot.summary.effectivePeers, 1);
+      assert.match(result.content[0].text, /a2a-zhoumingzhu-5b29/);
     } finally {
       globalThis.fetch = originalFetch;
     }

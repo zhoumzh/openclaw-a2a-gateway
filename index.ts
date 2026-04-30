@@ -586,7 +586,7 @@ const plugin = {
     };
 
     const inspectPeers = async (params: Record<string, unknown>) => {
-      const refreshRequested = Boolean(params.refreshDiscovery);
+      const refreshRequested = params.refreshDiscovery === false ? false : true;
       const peerName = typeof params.peer === "string" ? params.peer.trim() : "";
 
       if (refreshRequested) {
@@ -1031,7 +1031,7 @@ const plugin = {
             },
             refreshDiscovery: {
               type: "boolean" as const,
-              description: "Trigger a discovery refresh before reading the runtime peer set.",
+              description: "Trigger a discovery refresh before reading the runtime peer set. Defaults to true.",
             },
             peer: {
               type: "string" as const,

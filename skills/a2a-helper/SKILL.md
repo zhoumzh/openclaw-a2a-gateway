@@ -30,6 +30,8 @@ Current helper action:
 }
 ```
 
+If `refreshDiscovery` is omitted, the helper should still refresh before answering.
+
 To focus on one peer:
 
 ```json

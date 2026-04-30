@@ -87,11 +87,12 @@ curl -s http://localhost:18800/.well-known/agent.json | python3 -m json.tool
 {
   "tool": "a2a_helper",
   "arguments": {
-    "action": "inspect_peers",
-    "refreshDiscovery": true
+    "action": "inspect_peers"
   }
 }
 ```
+
+`inspect_peers` 默认会先刷新一次 discovery；只有在你明确传 `refreshDiscovery: false` 时才跳过。
 
 这里的“可见 / 可用参与者”有严格边界：
 
