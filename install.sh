@@ -3,10 +3,13 @@ set -euo pipefail
 
 REPO_URL="https://gitlab.chehejia.com/zhoumingzhu/openclaw-a2a-gateway.git"
 INSTALL_DIR="${HOME}/.openclaw/workspace/plugins/a2a-gateway"
+PLUGIN_ID="a2a-gateway"
+EXTENSION_DIR="${HOME}/.openclaw/extensions/${PLUGIN_ID}"
 
 echo "==> A2A Gateway (Extended) Installer"
 echo "    Repo : ${REPO_URL}"
 echo "    Path : ${INSTALL_DIR}"
+echo "    Extension : ${EXTENSION_DIR}"
 [ -n "${REGISTRY_URL:-}" ] && echo "    Registry : ${REGISTRY_URL}"
 echo ""
 
@@ -33,6 +36,15 @@ npm install --production --prefix "${INSTALL_DIR}"
 
 # 4. 注册插件
 echo "==> Registering plugin with OpenClaw..."
+if [ -d "${EXTENSION_DIR}" ]; then
+  echo "==> Existing installed plugin detected at ${EXTENSION_DIR}"
+  if openclaw plugins uninstall "${PLUGIN_ID}"; then
+    echo "    Existing plugin uninstalled via OpenClaw CLI."
+  else
+    echo "    OpenClaw uninstall failed or is unsupported. Removing extension directory directly..."
+    rm -rf "${EXTENSION_DIR}"
+  fi
+fi
 openclaw plugins install "${INSTALL_DIR}"
 
 # 5. 配置注册中心主机地址（若提供了 REGISTRY_URL）
