@@ -386,11 +386,20 @@ function extractLatestAssistantReply(historyPayload: unknown): string | undefine
     return undefined;
   }
 
-  const messages = Array.isArray(body.messages) ? body.messages : [];
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const entry = asObject(messages[i]);
+  const entries = Array.isArray(body.messages)
+    ? body.messages
+    : Array.isArray(body.history)
+      ? body.history
+      : [];
+
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = asObject(entries[i]);
     if (!entry || entry.role !== "assistant") {
       continue;
+    }
+
+    if (typeof entry.content === "string" && entry.content.trim()) {
+      return entry.content.trim();
     }
 
     const text = extractAgentPayloadText(entry);
@@ -1284,18 +1293,30 @@ export class OpenClawAgentExecutor implements AgentExecutor {
       ? rawHistory.slice(-MAX_HISTORY_MESSAGES)
       : rawHistory;
 
-    // Publish initial "working" state so the task is trackable during async dispatch
-    const workingTask: Task = {
+    // Publish an initial Task object so A2A non-blocking callers can receive
+    // a durable task handle immediately and poll tasks/get later.
+    const initialTask: Task = {
       kind: "task",
       id: taskId,
+      contextId,
+      status: {
+        state: requestContext.task ? "working" : "submitted",
+        timestamp: new Date().toISOString(),
+      },
+      history: existingHistory,
+    };
+    eventBus.publish(initialTask);
+
+    eventBus.publish({
+      kind: "status-update",
+      taskId,
       contextId,
       status: {
         state: "working",
         timestamp: new Date().toISOString(),
       },
-      history: existingHistory,
-    };
-    eventBus.publish(workingTask);
+      final: false,
+    });
 
     // Validate inbound FileParts before dispatching to the agent
     const fileValidationError = this.validateInboundFileParts(requestContext.userMessage);
@@ -1329,17 +1350,16 @@ export class OpenClawAgentExecutor implements AgentExecutor {
     // Emit periodic heartbeat events while the agent is working.
     // This keeps SSE connections alive and signals that the task is still in progress.
     const heartbeat = setInterval(() => {
-      const heartbeatTask: Task = {
-        kind: "task",
-        id: taskId,
+      eventBus.publish({
+        kind: "status-update",
+        taskId,
         contextId,
         status: {
           state: "working",
           timestamp: new Date().toISOString(),
         },
-        history: existingHistory,
-      };
-      eventBus.publish(heartbeatTask);
+        final: false,
+      });
     }, STREAMING_HEARTBEAT_INTERVAL_MS);
 
     try {
@@ -1480,12 +1500,24 @@ export class OpenClawAgentExecutor implements AgentExecutor {
         sessionKey,
       };
 
-      const finalPayload = await gateway.request(
-        "agent",
-        agentParams,
-        this.agentResponseTimeoutMs,
-        true,
-      );
+      let finalPayload: unknown;
+      try {
+        finalPayload = await gateway.request(
+          "agent",
+          agentParams,
+          this.agentResponseTimeoutMs,
+          true,
+        );
+      } catch (error: unknown) {
+        const historyResponse = await this.lookupGatewayHistoryResponse(gateway, sessionKey);
+        if (historyResponse) {
+          this.api.logger.warn(
+            `a2a-gateway: agent RPC timed out after accept; recovered reply from history for session ${sessionKey}`,
+          );
+          return historyResponse;
+        }
+        throw error;
+      }
       const finalBody = asObject(finalPayload);
       const status = asString(finalBody?.status);
       if (status && status !== "ok") {
@@ -1500,21 +1532,32 @@ export class OpenClawAgentExecutor implements AgentExecutor {
 
       // sessionKey is always available (deterministic from contextId),
       // so we can always try to retrieve the latest assistant reply from history.
-      const historyPayload = await gateway.request(
-        "chat.history",
-        { sessionKey, limit: 50 },
-        GATEWAY_REQUEST_TIMEOUT_MS,
-        false,
-      );
-      const historyText = extractLatestAssistantReply(historyPayload);
-      if (historyText) {
-        return { text: historyText, mediaUrls: [] };
+      const historyResponse = await this.lookupGatewayHistoryResponse(gateway, sessionKey);
+      if (historyResponse) {
+        return historyResponse;
       }
 
       throw new Error("No assistant response text returned by gateway");
     } finally {
       this.wsPool.release(gatewayConfig);
     }
+  }
+
+  private async lookupGatewayHistoryResponse(
+    gateway: GatewayRpcConnection,
+    sessionKey: string,
+  ): Promise<AgentResponse | undefined> {
+    const historyPayload = await gateway.request(
+      "chat.history",
+      { sessionKey, limit: 50 },
+      GATEWAY_REQUEST_TIMEOUT_MS,
+      false,
+    );
+    const historyText = extractLatestAssistantReply(historyPayload);
+    if (!historyText) {
+      return undefined;
+    }
+    return { text: historyText, mediaUrls: [] };
   }
 
   private resolveGatewayRuntimeConfig(): GatewayRuntimeConfig {

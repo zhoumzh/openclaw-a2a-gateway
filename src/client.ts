@@ -167,6 +167,7 @@ export class A2AClient {
     peer: PeerConfig,
     message: Record<string, unknown>,
     options?: {
+      blocking?: boolean;
       healthManager?: PeerHealthManager;
       retryConfig?: RetryConfig;
       log?: (level: "info" | "warn", msg: string, details?: Record<string, unknown>) => void;
@@ -184,7 +185,7 @@ export class A2AClient {
       };
     }
 
-    const doSend = () => this.doSendMessage(peer, message, options?.log);
+    const doSend = () => this.doSendMessage(peer, message, options?.blocking ?? false, options?.log);
 
     let result: OutboundSendResult;
     if (retryConfig && retryConfig.maxRetries > 0) {
@@ -206,6 +207,26 @@ export class A2AClient {
   }
 
   /**
+   * Fetch a remote peer task via A2A tasks/get.
+   */
+  async getTask(
+    peer: PeerConfig,
+    taskId: string,
+    historyLength?: number,
+  ): Promise<Record<string, unknown>> {
+    const { baseUrl, path } = parseAgentCardUrl(peer.agentCardUrl);
+    const { factory } = this.buildFactory(peer);
+    const sdkClient = await factory.createFromUrl(baseUrl, path);
+    const task = await sdkClient.getTask({
+      id: taskId,
+      ...(typeof historyLength === "number" && Number.isFinite(historyLength) && historyLength >= 0
+        ? { historyLength }
+        : {}),
+    });
+    return task as unknown as Record<string, unknown>;
+  }
+
+  /**
    * Core send logic with automatic transport fallback.
    *
    * 1. Resolve the Agent Card to discover available transports.
@@ -218,6 +239,7 @@ export class A2AClient {
   private async doSendMessage(
     peer: PeerConfig,
     message: Record<string, unknown>,
+    blocking: boolean,
     log?: (level: "info" | "warn", msg: string, details?: Record<string, unknown>) => void,
   ): Promise<OutboundSendResult> {
     const { baseUrl, path } = parseAgentCardUrl(peer.agentCardUrl);
@@ -243,6 +265,9 @@ export class A2AClient {
 
     const sendParams: MessageSendParams = {
       message: outboundMessage,
+      configuration: {
+        blocking,
+      },
     };
 
     const serviceParameters: Record<string, string> = {};

@@ -158,11 +158,70 @@ describe("a2a-gateway plugin", () => {
       assert.equal(true, true);
       assert.equal(finishedCalled, true);
 
+      const initialTask = published[0] as Record<string, unknown>;
+      assert.equal((initialTask.status as Record<string, unknown>).state, "submitted");
+
       const finalTask = published[published.length - 1] as Record<string, unknown>;
       const status = finalTask.status as Record<string, unknown>;
       const message = status.message as Record<string, unknown>;
       const parts = message.parts as Array<Record<string, unknown>>;
       assert.equal(parts[0].text, "Gateway response");
+    } finally {
+      (globalThis as any).WebSocket = originalWebSocket;
+    }
+  });
+
+  it("recovers assistant reply from chat history when agent final response times out", async () => {
+    const api = createApi();
+
+    const MockWS = createMockWebSocketClass({
+      suppressAgentFinalResponse: true,
+      onHistory: (params) => ({
+        history: [{
+          role: "assistant",
+          content: `Recovered reply for ${String(params.sessionKey || "")}`,
+        }],
+      }),
+    });
+
+    const originalWebSocket = (globalThis as any).WebSocket;
+    (globalThis as any).WebSocket = MockWS;
+
+    try {
+      const executor = new OpenClawAgentExecutor(
+        api,
+        makeConfig({
+          timeouts: { agentResponseTimeoutMs: 1000 },
+        }) as unknown as GatewayConfig,
+      );
+      const published: unknown[] = [];
+
+      await executor.execute(
+        {
+          taskId: "task-timeout-history",
+          contextId: "ctx-timeout-history",
+          userMessage: {
+            messageId: "msg-timeout-history",
+            role: "user",
+            agentId: "writer-agent",
+            parts: [{ kind: "text", text: "hello with slow final reply" }],
+          },
+        } as any,
+        {
+          publish(event: unknown) {
+            published.push(event);
+          },
+          finished() {},
+        } as any,
+      );
+
+      const finalTask = published[published.length - 1] as Record<string, unknown>;
+      const status = finalTask.status as Record<string, unknown>;
+      assert.equal(status.state, "completed");
+
+      const message = status.message as Record<string, unknown>;
+      const parts = message.parts as Array<Record<string, unknown>>;
+      assert.equal(parts[0].text, "Recovered reply for agent:writer-agent:a2a:ctx-timeout-history");
     } finally {
       (globalThis as any).WebSocket = originalWebSocket;
     }
@@ -748,6 +807,7 @@ describe("a2a-gateway plugin", () => {
 
       const params = received[0].params as Record<string, unknown>;
       assert.equal(typeof params, "object");
+      assert.equal((params as any)?.configuration?.blocking, false);
 
       const msg = (params as any)?.message as Record<string, unknown>;
       assert.equal(typeof msg, "object");
@@ -820,6 +880,7 @@ describe("a2a-gateway plugin", () => {
       assert.equal(received[0].method, "message/send");
 
       const params = received[0].params as Record<string, unknown>;
+      assert.equal((params as any)?.configuration?.blocking, false);
       const msg = (params as any)?.message as Record<string, unknown>;
       assert.equal(msg.agentId, "peer-agent");
       assert.deepEqual(msg.parts, [{ kind: "text", text: "ping" }]);
@@ -939,6 +1000,7 @@ describe("a2a-gateway plugin", () => {
 
       assert.ok(result.details.ok, "tool call should succeed");
       assert.ok(seenAuthHeaders.includes("Bearer peer-secret-token"));
+      assert.equal(result.details.blocking, false);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1013,6 +1075,7 @@ describe("a2a-gateway plugin", () => {
       assert.equal(received.length, 1);
 
       const params = received[0].params as Record<string, unknown>;
+      assert.equal((params as any)?.configuration?.blocking, false);
       const msg = (params as any)?.message as Record<string, unknown>;
 
       // Verify agentId is forwarded
@@ -1029,6 +1092,81 @@ describe("a2a-gateway plugin", () => {
     } finally {
       globalThis.fetch = originalFetch;
       lookupMock.mock.restore();
+    }
+  });
+
+  it("a2a_get_task tool fetches remote task state", async () => {
+    const received: Array<Record<string, unknown>> = [];
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+
+      if (url === "http://mock-peer/.well-known/agent-card.json" || url === "http://mock-peer/.well-known/agent.json") {
+        return new Response(
+          JSON.stringify({
+            protocolVersion: "0.3.0",
+            name: "Peer Agent",
+            url: "http://mock-peer/a2a/jsonrpc",
+            skills: [],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+
+      if (url === "http://mock-peer/a2a/jsonrpc") {
+        const bodyText = String(init?.body || "{}");
+        const payload = JSON.parse(bodyText) as Record<string, unknown>;
+        received.push(payload);
+
+        return new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: payload.id,
+            result: {
+              kind: "task",
+              id: "task-remote-1",
+              contextId: "ctx-remote-1",
+              status: {
+                state: "working",
+                timestamp: new Date().toISOString(),
+              },
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+
+    try {
+      const { tools } = registerPlugin(makeConfig({
+        peers: [
+          {
+            name: "peer-1",
+            agentCardUrl: "http://mock-peer/.well-known/agent-card.json",
+          },
+        ],
+      }));
+
+      const getTaskTool = tools.get("a2a_get_task");
+      assert.ok(getTaskTool, "a2a_get_task tool should be registered");
+
+      const result = await getTaskTool.execute("call-1", {
+        peer: "peer-1",
+        taskId: "task-remote-1",
+        historyLength: 5,
+      });
+
+      assert.ok(result.details.ok, "tool call should succeed");
+      assert.equal(received.length, 1);
+      assert.equal(received[0].method, "tasks/get");
+      assert.equal((received[0].params as any)?.id, "task-remote-1");
+      assert.equal((received[0].params as any)?.historyLength, 5);
+      assert.equal(result.details.taskState, "working");
+    } finally {
+      globalThis.fetch = originalFetch;
     }
   });
 });

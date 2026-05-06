@@ -85,8 +85,10 @@ export function createApi() {
 export function createMockWebSocketClass(options?: {
   onAgent?: (params: Record<string, unknown>) => void;
   onConnect?: (params: Record<string, unknown>) => Record<string, unknown>;
+  onHistory?: (params: Record<string, unknown>) => Record<string, unknown>;
   agentResponseText?: string;
   agentResponsePayloads?: Array<Record<string, unknown>>;
+  suppressAgentFinalResponse?: boolean;
 }) {
   const agentResponseText = options?.agentResponseText ?? "Gateway response";
   const agentResponsePayloads = options?.agentResponsePayloads;
@@ -138,11 +140,23 @@ export function createMockWebSocketClass(options?: {
       if (frame.method === "agent") {
         options?.onAgent?.(frame.params || {});
         this.respond(frame.id, true, { status: "accepted" });
-        const payloads = agentResponsePayloads ?? [{ kind: "text", text: agentResponseText }];
-        this.respond(frame.id, true, {
-          status: "ok",
-          result: { payloads },
-        });
+        if (!options?.suppressAgentFinalResponse) {
+          const payloads = agentResponsePayloads ?? [{ kind: "text", text: agentResponseText }];
+          this.respond(frame.id, true, {
+            status: "ok",
+            result: { payloads },
+          });
+        }
+        return;
+      }
+      if (frame.method === "chat.history") {
+        this.respond(
+          frame.id,
+          true,
+          options?.onHistory?.(frame.params || {}) ?? {
+            messages: [{ role: "assistant", content: agentResponseText }],
+          },
+        );
         return;
       }
       this.respond(frame.id, false, null, { message: `unsupported method ${frame.method}` });

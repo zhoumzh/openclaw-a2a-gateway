@@ -116,6 +116,71 @@ function asBoolean(value: unknown, fallback: boolean): boolean {
   return fallback;
 }
 
+const TERMINAL_TASK_STATES = new Set(["completed", "failed", "canceled", "rejected"]);
+const IN_PROGRESS_TASK_STATES = new Set(["submitted", "working", "input-required", "auth-required"]);
+
+function summarizePeerA2AResponse(response: unknown): {
+  ok: boolean;
+  summary: string;
+  taskId?: string;
+  taskState?: string;
+} {
+  const body = asObject(response);
+  const kind = asString(body.kind, "");
+
+  if (kind === "task") {
+    const taskId = asString(body.id, "");
+    const status = asObject(body.status);
+    const state = asString(status.state, "");
+
+    if (TERMINAL_TASK_STATES.has(state)) {
+      return {
+        ok: state === "completed",
+        summary: state === "completed"
+          ? `peer task ${taskId || "(unknown)"} completed`
+          : `peer task ${taskId || "(unknown)"} ended in state ${state}`,
+        ...(taskId ? { taskId } : {}),
+        ...(state ? { taskState: state } : {}),
+      };
+    }
+
+    if (IN_PROGRESS_TASK_STATES.has(state)) {
+      return {
+        ok: true,
+        summary: `peer accepted task ${taskId || "(unknown)"} and is currently ${state}`,
+        ...(taskId ? { taskId } : {}),
+        ...(state ? { taskState: state } : {}),
+      };
+    }
+
+    return {
+      ok: true,
+      summary: `peer returned task ${taskId || "(unknown)"}`,
+      ...(taskId ? { taskId } : {}),
+      ...(state ? { taskState: state } : {}),
+    };
+  }
+
+  if (kind === "message") {
+    return {
+      ok: true,
+      summary: "peer returned a direct message response",
+    };
+  }
+
+  if (body.accepted === true) {
+    return {
+      ok: true,
+      summary: "peer accepted the request for asynchronous processing",
+    };
+  }
+
+  return {
+    ok: true,
+    summary: "peer returned a response payload",
+  };
+}
+
 function normalizeHttpPath(value: string, fallback: string): string {
   const trimmed = value.trim() || fallback;
   return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
@@ -610,9 +675,62 @@ const plugin = {
       };
     };
 
+    const getPeerTask = async (payload: Record<string, unknown>) => {
+      const peerName = asString(payload.peer || payload.name, "");
+      const taskId = asString(payload.taskId || payload.id, "");
+
+      if (!peerName || !taskId) {
+        return {
+          ok: false,
+          data: {
+            error: "peer and taskId are required",
+          },
+        };
+      }
+
+      const peer = findPeer(peerName);
+      if (!peer) {
+        return {
+          ok: false,
+          data: {
+            error: `Peer not found: ${peerName}`,
+          },
+        };
+      }
+
+      try {
+        const task = await client.getTask(
+          peer,
+          taskId,
+          typeof payload.historyLength === "number" ? payload.historyLength : undefined,
+        );
+        const summary = summarizePeerA2AResponse(task);
+        return {
+          ok: summary.ok,
+          data: {
+            peer: peer.name,
+            taskId,
+            response: task,
+            summary: summary.summary,
+            ...(summary.taskState ? { taskState: summary.taskState } : {}),
+          },
+        };
+      } catch (error: unknown) {
+        return {
+          ok: false,
+          data: {
+            peer: peer.name,
+            taskId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        };
+      }
+    };
+
     const sendToPeer = async (payload: Record<string, unknown>) => {
       let peerName = asString(payload.peer || payload.name, "");
       const message = asObject(payload.message || payload.payload);
+      const blocking = asBoolean(payload.blocking, false);
 
       if (!peerName && config.routing.rules.length > 0) {
         const msgText = typeof message.text === "string" ? message.text
@@ -677,6 +795,7 @@ const plugin = {
       };
       api.logger.info(`a2a-gateway: outbound send start: ${JSON.stringify(outboundLogContext)}`);
       const sendOptions = {
+        blocking,
         healthManager: healthManager ?? undefined,
         retryConfig: config.resilience.retry,
         log: (level: "info" | "warn", msg: string, details?: Record<string, unknown>) => {
@@ -690,14 +809,18 @@ const plugin = {
       try {
         const result = await client.sendMessage(peer, message, sendOptions);
         const outDuration = Date.now() - startedAt;
-        telemetry.recordOutboundRequest(peer.name, result.ok, result.statusCode, outDuration);
-        auditLogger.recordOutbound(peer.name, result.ok, result.statusCode, outDuration);
+        const summary = summarizePeerA2AResponse(result.response);
+        const semanticOk = result.ok && summary.ok;
+        telemetry.recordOutboundRequest(peer.name, semanticOk, result.statusCode, outDuration);
+        auditLogger.recordOutbound(peer.name, semanticOk, result.statusCode, outDuration);
 
-        if (result.ok) {
+        if (semanticOk) {
           api.logger.info(`a2a-gateway: outbound send succeeded: ${JSON.stringify({
             ...outboundLogContext,
             durationMs: outDuration,
             statusCode: result.statusCode,
+            blocking,
+            summary: summary.summary,
           })}`);
           return {
             ok: true,
@@ -705,6 +828,10 @@ const plugin = {
               peer: peer.name,
               statusCode: result.statusCode,
               response: result.response,
+              summary: summary.summary,
+              ...(summary.taskId ? { taskId: summary.taskId } : {}),
+              ...(summary.taskState ? { taskState: summary.taskState } : {}),
+              blocking,
             },
           };
         }
@@ -713,6 +840,8 @@ const plugin = {
           ...outboundLogContext,
           durationMs: outDuration,
           statusCode: result.statusCode,
+          blocking,
+          summary: summary.summary,
           response: result.response,
         })}`);
         return {
@@ -721,6 +850,10 @@ const plugin = {
             peer: peer.name,
             statusCode: result.statusCode,
             response: result.response,
+            summary: summary.summary,
+            ...(summary.taskId ? { taskId: summary.taskId } : {}),
+            ...(summary.taskState ? { taskState: summary.taskState } : {}),
+            blocking,
           },
         };
       } catch (error) {
@@ -1010,6 +1143,12 @@ const plugin = {
         .catch((error) => respond(false, { error: String((error as Error)?.message || error) }));
     });
 
+    api.registerGatewayMethod("a2a.task.get", ({ params, respond }) => {
+      getPeerTask(asObject(params))
+        .then((result) => respond(result.ok, result.data))
+        .catch((error) => respond(false, { error: String((error as Error)?.message || error) }));
+    });
+
     // ------------------------------------------------------------------
     // Agent tool: a2a_send_file
     // Lets the agent send a file (by URI) to a peer via A2A FilePart.
@@ -1053,7 +1192,7 @@ const plugin = {
 
       api.registerTool({
         name: "a2a_send_message",
-        description: "Send a text message to an A2A peer and return the peer response.",
+        description: "Send a text message to an A2A peer. Defaults to async A2A task mode so long-running LLM peers can accept quickly and finish later.",
         label: "A2A Send Message",
         parameters: {
           type: "object" as const,
@@ -1077,11 +1216,16 @@ const plugin = {
               items: { type: "string" as const },
               description: "Optional tags used by peer-side logic or routing.",
             },
+            blocking: {
+              type: "boolean" as const,
+              description: "Wait for the peer's final answer in this call. Defaults to false for A2A task mode.",
+            },
           },
         },
         async execute(_toolCallId, params) {
           const result = await sendToPeer({
             peer: params.peer,
+            ...(typeof params.blocking === "boolean" ? { blocking: params.blocking } : {}),
             message: {
               text: params.message,
               ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -1090,12 +1234,13 @@ const plugin = {
           });
 
           if (result.ok) {
+            const data = result.data as Record<string, unknown>;
             return {
               content: [{
                 type: "text" as const,
-                text: `Message sent to ${String((result.data as Record<string, unknown>).peer)}.\nResponse: ${JSON.stringify((result.data as Record<string, unknown>).response)}`,
+                text: `Message sent to ${String(data.peer)}.\n${String(data.summary || "Peer accepted the request.")}\nResponse: ${JSON.stringify(data.response)}`,
               }],
-              details: { ok: true, ...(result.data as Record<string, unknown>) },
+              details: { ok: true, ...data },
             };
           }
 
@@ -1123,13 +1268,14 @@ const plugin = {
           mimeType: { type: "string" as const, description: "MIME type (e.g. application/pdf). Auto-detected from extension if omitted." },
           text: { type: "string" as const, description: "Optional text message to include alongside the file" },
           agentId: { type: "string" as const, description: "Route to a specific agentId on the peer (OpenClaw extension). Omit to use the peer's default agent." },
+          blocking: { type: "boolean" as const, description: "Wait for the peer's final answer in this call. Defaults to false for A2A task mode." },
         },
       };
 
       api.registerTool({
         name: "a2a_send_file",
-        description: "Send a file to a peer agent via A2A. The file is referenced by its public URL (URI). " +
-          "Use this when you need to transfer a document, image, or any file to another agent.",
+        description: "Send a file to a peer agent via A2A. Defaults to async A2A task mode so long-running LLM peers can accept quickly and finish later. " +
+          "The file is referenced by its public URL (URI).",
         label: "A2A Send File",
         parameters: sendFileParams,
         async execute(toolCallId, params) {
@@ -1177,18 +1323,32 @@ const plugin = {
               message.agentId = params.agentId;
             }
             const result = await client.sendMessage(peer, message, {
+              blocking: asBoolean(params.blocking, false),
               healthManager: healthManager ?? undefined,
               retryConfig: config.resilience.retry,
             });
-            if (result.ok) {
+            const summary = summarizePeerA2AResponse(result.response);
+            if (result.ok && summary.ok) {
               return {
-                content: [{ type: "text" as const, text: `File sent to ${params.peer} via A2A.\nURI: ${params.uri}\nResponse: ${JSON.stringify(result.response)}` }],
-                details: { ok: true, response: result.response },
+                content: [{ type: "text" as const, text: `File sent to ${params.peer} via A2A.\nURI: ${params.uri}\n${summary.summary}\nResponse: ${JSON.stringify(result.response)}` }],
+                details: {
+                  ok: true,
+                  response: result.response,
+                  summary: summary.summary,
+                  ...(summary.taskId ? { taskId: summary.taskId } : {}),
+                  ...(summary.taskState ? { taskState: summary.taskState } : {}),
+                },
               };
             }
             return {
-              content: [{ type: "text" as const, text: `Failed to send file to ${params.peer}: ${JSON.stringify(result.response)}` }],
-              details: { ok: false, response: result.response },
+              content: [{ type: "text" as const, text: `Failed to send file to ${params.peer}: ${summary.summary}\nResponse: ${JSON.stringify(result.response)}` }],
+              details: {
+                ok: false,
+                response: result.response,
+                summary: summary.summary,
+                ...(summary.taskId ? { taskId: summary.taskId } : {}),
+                ...(summary.taskState ? { taskState: summary.taskState } : {}),
+              },
             };
           } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
@@ -1197,6 +1357,58 @@ const plugin = {
               details: { ok: false, error: msg },
             };
           }
+        },
+      });
+
+      api.registerTool({
+        name: "a2a_get_task",
+        description: "Fetch the latest status of a previously accepted remote A2A task via tasks/get.",
+        label: "A2A Get Task",
+        parameters: {
+          type: "object" as const,
+          additionalProperties: false,
+          required: ["peer", "taskId"],
+          properties: {
+            peer: {
+              type: "string" as const,
+              description: "Name of the target peer.",
+            },
+            taskId: {
+              type: "string" as const,
+              description: "Remote A2A task ID returned by a prior send.",
+            },
+            historyLength: {
+              type: "number" as const,
+              description: "Optional number of recent history messages to include.",
+            },
+          },
+        },
+        async execute(_toolCallId, params) {
+          const result = await getPeerTask({
+            peer: params.peer,
+            taskId: params.taskId,
+            ...(typeof params.historyLength === "number" ? { historyLength: params.historyLength } : {}),
+          });
+
+          if (result.ok) {
+            const data = result.data as Record<string, unknown>;
+            return {
+              content: [{
+                type: "text" as const,
+                text: `Fetched task ${String(data.taskId)} from ${String(data.peer)}.\n${String(data.summary || "")}\nResponse: ${JSON.stringify(data.response)}`,
+              }],
+              details: { ok: true, ...data },
+            };
+          }
+
+          const data = result.data as Record<string, unknown>;
+          return {
+            content: [{
+              type: "text" as const,
+              text: `Failed to fetch task ${String(params.taskId)} from ${String(params.peer)}: ${String(data.error || JSON.stringify(data))}`,
+            }],
+            details: { ok: false, ...data },
+          };
         },
       });
     }
