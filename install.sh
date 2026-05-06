@@ -39,9 +39,13 @@ echo "==> Registering plugin with OpenClaw..."
 if [ -d "${EXTENSION_DIR}" ]; then
   echo "==> Existing installed plugin detected at ${EXTENSION_DIR}"
   if openclaw plugins uninstall "${PLUGIN_ID}"; then
-    echo "    Existing plugin uninstalled via OpenClaw CLI."
+    echo "    Existing plugin uninstall requested via OpenClaw CLI."
   else
-    echo "    OpenClaw uninstall failed or is unsupported. Removing extension directory directly..."
+    echo "    OpenClaw uninstall failed or is unsupported."
+  fi
+
+  if [ -e "${EXTENSION_DIR}" ]; then
+    echo "    Extension directory still exists after uninstall. Removing it directly..."
     rm -rf "${EXTENSION_DIR}"
   fi
 fi
