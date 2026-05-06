@@ -67,7 +67,7 @@ To focus on one peer:
 
 Present the tool result as follows. Do NOT invent field names or reformat the snapshot into custom structures like `count`/`entries`.
 
-**When peers exist** — list each entry in `effectivePeers` with `name`, `source` (static/discovered), and `agentCardUrl`. Also show `summary` counts.
+**When peers exist** — for each entry in `effectivePeers`, fetch its `agentCardUrl` (HTTP GET, expect JSON) and extract the `name` field from the agent card. Display the agent card `name` as the primary label; show the peer ID (`effectivePeers[].name`) as secondary context, along with `source` (static/discovered) and `agentCardUrl`. If the fetch fails or the field is absent, fall back to the peer ID as the display name. Also show `summary` counts.
 
 **When `effectivePeers` is empty** — report it directly using the counts from `summary` (e.g. `static=0 discovered=0 effective=0`). Then explain the cause based on the discovery settings in the snapshot:
 
